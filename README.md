@@ -38,29 +38,6 @@ npm install
 npm start
 ```
 
-如果 PowerShell 阻止 `npm` 脚本运行，可以使用：
-
-```powershell
-npm.cmd start
-```
-
-默认服务地址：
-
-```text
-http://localhost:3000
-```
-
-开发预览模式：
-
-```text
-http://localhost:3000/?dev=1
-```
-
-核心技术文档子页面：
-
-```text
-http://localhost:3000/docs/core-tech.html
-```
 
 ## 配置
 
