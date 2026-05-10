@@ -263,3 +263,24 @@ git push origin main
 
 - `http://localhost:3000/docs/core-tech.html` 返回 `200`
 - `public/index.html` 和 `public/docs/core-tech.html` 内联脚本解析通过
+
+### 17. 拆分主站前端代码
+
+为降低后续开发维护成本，将原本集中在 `public/index.html` 中的样式和业务脚本拆分为独立文件。
+
+新增文件：
+
+- `public/css/styles.css`
+- `public/js/app.js`
+
+修改文件：
+
+- `public/index.html` 仅保留 HTML 骨架、外部依赖、App 容器、CSS 引用和 JS 引用
+- `README.md` 更新项目目录结构，补充 `public/css/`、`public/js/`、`public/docs/` 的职责说明
+
+验证：
+
+- `node --check public/js/app.js` 通过
+- `http://localhost:3000/css/styles.css` 返回 `200`
+- `http://localhost:3000/js/app.js` 返回 `200`
+- `http://localhost:3000/?dev=1` 返回 `200`
