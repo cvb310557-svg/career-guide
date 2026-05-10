@@ -217,3 +217,16 @@ git push origin main
 - `loadInitialData()` 捕获错误后继续使用现有模拟数据
 
 这样在数据库不可用时，`http://localhost:3000/?dev=1` 仍可正常进入前端预览页面。
+
+### 14. 修复底部 Tab 切换失败问题
+
+继续排查发现，点击“知识库”时如果 `/api/knowledge` 返回 `500`，旧逻辑会先把错误对象写入全局变量 `knowledgeData`，再执行 `data.map()` 抛错并显示“加载失败”。之后再点击“首页”或“AI面试”，这些页面会继续调用 `knowledgeData.slice(...)`，因为 `knowledgeData` 已经不是数组，所以也会渲染失败。
+
+修改 `public/index.html`：
+
+- 新增 `asArray(value)`，统一保护数组数据
+- 首页渲染前对 `knowledgeData`、`mentors`、`forumPosts` 做数组保护
+- AI 面试页渲染前对 `knowledgeData` 做数组保护
+- 知识库页改为使用 `fetchArray('/knowledge')`
+- 知识库接口失败时保留初始化阶段的模拟数据，不再污染 `knowledgeData`
+- 知识库为空或搜索无结果时显示空状态，而不是“加载失败”

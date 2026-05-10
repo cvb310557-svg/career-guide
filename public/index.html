@@ -417,6 +417,10 @@
             };
         }
 
+        function asArray(value) {
+            return Array.isArray(value) ? value : [];
+        }
+
         // 面试官形象列表 - 使用本地照片（照片放在images文件夹中）
         // 找到代码中约40行附近的 interviewers 数组，替换为：
 
@@ -827,8 +831,9 @@ case 'profile':
         // ==================== 首页 ====================
         function renderHome(container) {
             // 确保有数据
-            const hotKnowledge = knowledgeData.slice(0, 4);
-            const topMentors = mentors.slice(0, 3);
+            const hotKnowledge = asArray(knowledgeData).slice(0, 4);
+            const topMentors = asArray(mentors).slice(0, 3);
+            const latestPosts = asArray(forumPosts).slice(0, 3);
             
             container.innerHTML = `
                 <div style="padding: 8px 0 20px;">
@@ -945,7 +950,7 @@ case 'profile':
                         <i class="fas fa-comments"></i> 最新讨论
                         <span style="margin-left: auto; font-size: 14px; color: #2c6e2c;" onclick="switchTab('forum')">进入论坛</span>
                     </div>
-                    ${forumPosts.slice(0, 3).map(post => `
+                    ${latestPosts.map(post => `
                         <div class="forum-item" onclick="showPostDetail(${post.id})">
                             <div>
                                 <i class="fas fa-circle" style="color: #2c6e2c; font-size: 8px;"></i>
@@ -1019,13 +1024,17 @@ case 'profile':
         async function renderKnowledge(container) {
             container.innerHTML = '<div class="loading"><i class="fas fa-spinner fa-pulse"></i> 加载知识库...</div>';
 
+            // 从数据库获取最新数据；失败时保留初始化阶段的模拟数据
             try {
-                // 从数据库获取最新数据
-                const response = await fetch(`${API_BASE}/knowledge`);
-                const data = await response.json();
+                const data = await fetchArray('/knowledge');
                 knowledgeData = data;
+            } catch (error) {
+                console.warn('知识库接口不可用，使用本地数据:', error);
+            }
 
-                container.innerHTML = `
+            const data = asArray(knowledgeData);
+
+            container.innerHTML = `
                     <div style="padding: 8px 0 20px;">
                         <div class="section-title">
                             <i class="fas fa-database"></i> 岗位知识库
@@ -1048,14 +1057,14 @@ case 'profile':
                         </div>
 
                         <div class="knowledge-grid" id="knowledge-grid">
-                            ${data.map(item => `
+                            ${data.length ? data.map(item => `
                                 <div class="knowledge-item" onclick="showKnowledgeDetail(${item.id})">
                                     <span class="company-tag">${item.company || '未知'}</span>
                                     <div class="position-name">${item.position || '岗位'}</div>
                                     <div class="question-preview">${(item.interview_questions || '暂无问题').substring(0, 30)}...</div>
                                     <span class="type-badge">${item.experience_type || '面经'}</span>
                                 </div>
-                            `).join('')}
+                            `).join('') : '<div style="grid-column: 1 / -1; text-align: center; color: #8aa08a; padding: 40px;">暂无知识库数据</div>'}
                         </div>
                     </div>
                 `;
@@ -1076,13 +1085,8 @@ case 'profile':
                             <div class="question-preview">${(item.interview_questions || '暂无问题').substring(0, 30)}...</div>
                             <span class="type-badge">${item.experience_type || '面经'}</span>
                         </div>
-                    `).join('');
+                    `).join('') || '<div style="grid-column: 1 / -1; text-align: center; color: #8aa08a; padding: 40px;">没有找到匹配内容</div>';
                 });
-
-            } catch (error) {
-                console.error('加载知识库失败:', error);
-                container.innerHTML = '<div style="color: red; text-align: center; padding: 40px;">加载失败，请稍后重试</div>';
-            }
         }
 
         // ==================== 筛选知识库 ====================
@@ -1320,6 +1324,8 @@ function confirmEndVideoInterview() {
 }
         // ==================== AI面试板块（修改后，包含面试官形象和视频面试入口）====================
         function renderInterview(container) {
+            const practiceItems = asArray(knowledgeData).slice(0, 4);
+
             container.innerHTML = `
                 <div style="padding: 8px 0 20px;">
                     <div class="section-title">
@@ -1384,14 +1390,14 @@ function confirmEndVideoInterview() {
                         <i class="fas fa-fire"></i> 热门练习
                     </div>
                     <div class="knowledge-grid">
-                        ${knowledgeData.slice(0, 4).map(item => `
+                        ${practiceItems.map(item => `
                             <div class="knowledge-item" onclick="startInterviewFromKnowledge(${item.id})">
                                 <span class="company-tag">${item.company || '未知'}</span>
                                 <div class="position-name">${item.position || '岗位'}</div>
                                 <div class="question-preview">基于真实面经训练</div>
                                 <span style="color: #2c6e2c; font-size: 12px;">${item.experience_type || '面经'}</span>
                             </div>
-                        `).join('')}
+                        `).join('') || '<div style="grid-column: 1 / -1; text-align: center; color: #8aa08a; padding: 24px;">暂无练习数据</div>'}
                     </div>
                 </div>
             `;
