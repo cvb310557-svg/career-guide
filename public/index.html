@@ -525,25 +525,35 @@ function hideSplashScreen() {
     }
 }
 
+        async function fetchArray(endpoint) {
+            const response = await fetch(`${API_BASE}${endpoint}`);
+            if (!response.ok) {
+                throw new Error(`${endpoint} returned ${response.status}`);
+            }
+
+            const data = await response.json();
+            if (!Array.isArray(data)) {
+                throw new Error(`${endpoint} did not return an array`);
+            }
+
+            return data;
+        }
+
         // ==================== 加载初始数据 ====================
         async function loadInitialData() {
             try {
                 // 加载知识库
-                const knowledgeRes = await fetch(`${API_BASE}/knowledge`);
-                knowledgeData = await knowledgeRes.json();
+                knowledgeData = await fetchArray('/knowledge');
 
                 // 加载论坛帖子
-                const forumRes = await fetch(`${API_BASE}/forum/posts`);
-                forumPosts = await forumRes.json();
+                forumPosts = await fetchArray('/forum/posts');
 
                 // 加载导师
-                const mentorRes = await fetch(`${API_BASE}/mentors`);
-                mentors = await mentorRes.json();
+                mentors = await fetchArray('/mentors');
 
                 // 加载面试历史
                 if (currentUser) {
-                    const historyRes = await fetch(`${API_BASE}/interview/history/${currentUser.id}`);
-                    interviewHistory = await historyRes.json();
+                    interviewHistory = await fetchArray(`/interview/history/${currentUser.id}`);
                 }
             } catch (error) {
                 console.error('加载数据失败:', error);

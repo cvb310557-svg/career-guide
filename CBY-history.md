@@ -204,3 +204,16 @@ git push origin main
 ### 12. 新增变更历史文档
 
 按要求新增 `CBY-history.md`，用于持续同步记录 Codex 对项目做过的修改、验证和版本管理状态。
+
+### 13. 修复开发预览白屏问题
+
+排查发现 `http://localhost:3000/api/knowledge` 在本地数据库未配置或未启动时会返回 `500`。浏览器 `fetch` 收到 `500` 不会自动进入 `catch`，原逻辑继续把 `{ error: ... }` 当数组渲染，导致首页执行 `.slice()` / `.map()` 时抛错并白屏。
+
+修改 `public/index.html`：
+
+- 新增 `fetchArray(endpoint)` 辅助函数
+- 当接口不是 `2xx` 状态时主动抛错
+- 当接口返回值不是数组时主动抛错
+- `loadInitialData()` 捕获错误后继续使用现有模拟数据
+
+这样在数据库不可用时，`http://localhost:3000/?dev=1` 仍可正常进入前端预览页面。
