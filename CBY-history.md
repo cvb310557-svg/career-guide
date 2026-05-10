@@ -244,3 +244,22 @@ git push origin main
 - 知识库卡片在桌面端变为三列
 - 导师卡片在桌面端从横向滚动变为三列网格
 - 手机端样式仍保留原来的底部导航和窄屏布局
+
+### 16. 接入核心技术文档子页面
+
+将下载目录中的文档页面 `D:\Users\cvb\Downloads\index.html` 作为独立静态子页面接入网站。
+
+新增文件：
+
+- `public/docs/core-tech.html`
+
+修改 `public/index.html`：
+
+- 在“我的”页面功能列表中新增“核心技术文档”入口
+- 入口链接到 `/docs/core-tech.html`
+- 使用 `target="_blank"` 和 `rel="noopener"` 打开独立文档页，避免影响当前主应用状态
+
+验证：
+
+- `http://localhost:3000/docs/core-tech.html` 返回 `200`
+- `public/index.html` 和 `public/docs/core-tech.html` 内联脚本解析通过

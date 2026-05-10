@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <title>职引官 · 核心技术文档</title>
+    <!-- Prism.js 代码高亮主题 -->
+    <link href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
+    <!-- 二维码生成库 -->
+    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: system-ui, 'Segoe UI', 'Roboto', sans-serif;
+            background: #f5f7fb;
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+        .sidebar {
+            width: 280px;
+            background: #1e2a3a;
+            color: #e2e8f0;
+            overflow-y: auto;
+            box-shadow: 2px 0 8px rgba(0,0,0,0.1);
+            display: flex;
+            flex-direction: column;
+        }
+        .sidebar-header {
+            padding: 1.5rem 1rem;
+            border-bottom: 1px solid #334155;
+        }
+        .sidebar-header h2 {
+            font-size: 1.4rem;
+            font-weight: 600;
+            color: white;
+        }
+        .sidebar-header p {
+            font-size: 0.8rem;
+            color: #94a3b8;
+            margin-top: 0.3rem;
+        }
+        .tech-list {
+            list-style: none;
+            flex: 1;
+        }
+        .tech-list li {
+            padding: 0.8rem 1.2rem;
+            cursor: pointer;
+            border-left: 3px solid transparent;
+            transition: all 0.2s;
+            font-size: 0.95rem;
+            font-weight: 500;
+        }
+        .tech-list li:hover {
+            background: #2d3e4e;
+            border-left-color: #3b82f6;
+        }
+        .tech-list li.active {
+            background: #0f172a;
+            border-left-color: #3b82f6;
+            color: white;
+        }
+        .main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            background: white;
+        }
+        .toolbar {
+            padding: 1rem 1.5rem;
+            background: #fff;
+            border-bottom: 1px solid #e2e8f0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .title-area {
+            font-weight: 600;
+            font-size: 1.2rem;
+            color: #0f172a;
+        }
+        .qr-area {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: #f8fafc;
+            padding: 6px 12px;
+            border-radius: 30px;
+        }
+        .qr-area span {
+            font-size: 0.85rem;
+            color: #475569;
+        }
+        #qrcode {
+            width: 48px;
+            height: 48px;
+            cursor: pointer;
+        }
+        .code-container {
+            flex: 1;
+            overflow: auto;
+            padding: 1.5rem;
+            background: #0f172a;
+        }
+        pre {
+            margin: 0;
+            border-radius: 12px;
+            font-size: 14px;
+        }
+        code {
+            font-family: 'Fira Code', 'JetBrains Mono', monospace;
+        }
+        .copy-btn {
+            position: absolute;
+            top: 12px;
+            right: 20px;
+            background: #334155;
+            border: none;
+            color: white;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        .copy-btn:hover {
+            background: #3b82f6;
+        }
+        .code-wrapper {
+            position: relative;
+        }
+        @media (max-width: 700px) {
+            .sidebar {
+                width: 220px;
+            }
+            .tech-list li {
+                padding: 0.6rem 1rem;
+                font-size: 0.85rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <div class="sidebar-header">
+            <h2>📘 职引官 · 技术栈</h2>
+            <p>点击左侧技术，右侧展示核心代码</p>
+        </div>
+        <ul class="tech-list" id="techList"></ul>
+    </div>
+    <div class="main">
+        <div class="toolbar">
+            <div class="title-area" id="currentTechName">请选择一项技术</div>
+            <div class="qr-area">
+                <span>📱 扫码访问</span>
+                <div id="qrcode"></div>
+            </div>
+        </div>
+        <div class="code-container">
+            <div class="code-wrapper">
+                <button class="copy-btn" id="copyBtn">📋 复制代码</button>
+                <pre><code id="codeBlock" class="language-python">// 点击左侧菜单查看代码示例</code></pre>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/prism.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-python.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-javascript.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-bash.min.js"></script>
+    <script>
+        // ---------- 技术数据（去除重复，修复最后一项爬虫代码）----------
+        const technologies = [
+            {
+                name: "BERT‑BiLSTM‑CRF",
+                code: `# 实体识别：从简历和JD中提取技能、岗位、学历标签
+import torch
+import torch.nn as nn
+from transformers import BertModel, BertTokenizer
+from torchcrf import CRF
+
+class BertBiLSTMCRF(nn.Module):
+    def __init__(self, bert_path, num_tags, lstm_hidden=256, dropout=0.3):
+        super().__init__()
+        self.bert = BertModel.from_pretrained(bert_path)
+        self.bilstm = nn.LSTM(
+            input_size=768,
+            hidden_size=lstm_hidden,
+            num_layers=2,
+            bidirectional=True,
+            batch_first=True,
+            dropout=dropout
+        )
+        self.classifier = nn.Linear(lstm_hidden * 2, num_tags)
+        self.crf = CRF(num_tags, batch_first=True)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, input_ids, attention_mask, labels=None):
+        bert_out = self.bert(input_ids, attention_mask=attention_mask).last_hidden_state
+        bert_out = self.dropout(bert_out)
+        lstm_out, _ = self.bilstm(bert_out)
+        emissions = self.classifier(lstm_out)
+        if labels is not None:
+            loss = -self.crf(emissions, labels, mask=attention_mask.bool())
+            return loss
+        else:
+            return self.crf.decode(emissions, mask=attention_mask.bool())
+
+# 使用示例
+tokenizer = BertTokenizer.from_pretrained("bert-base-chinese")
+model = BertBiLSTMCRF("bert-base-chinese", num_tags=7)
+# 训练后，输入“熟练使用Python，有3年数据分析经验” → 输出实体标签`,
+                language: "python"
+            },
+            {
+                name: "Sentence‑BERT",
+                code: `# 用户画像与岗位需求语义匹配（用于个性化推荐）
+from sentence_transformers import SentenceTransformer, util
+import torch
+
+model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
+
+def match_user_job(user_profile, job_requirement, knowledge_base):
+    user_emb = model.encode(user_profile, convert_to_tensor=True)
+    job_emb = model.encode(job_requirement, convert_to_tensor=True)
+    base_sim = util.pytorch_cos_sim(user_emb, job_emb).item()
+    
+    # 与知识库考点匹配，计算综合推荐分数
+    kb_embs = model.encode(knowledge_base, convert_to_tensor=True)
+    user_kb_sim = util.pytorch_cos_sim(user_emb, kb_embs)[0]
+    job_kb_sim = util.pytorch_cos_sim(job_emb, kb_embs)[0]
+    final_scores = (user_kb_sim + job_kb_sim) / 2
+    top_idx = torch.topk(final_scores, k=3).indices
+    recommended = [knowledge_base[i] for i in top_idx]
+    return base_sim, recommended
+
+# 实际调用
+user = "金融数据岗，熟练SQL和Python，CFA一级"
+job = "要求SQL、Python，具备金融建模能力"
+kb = ["SQL优化", "Python数据分析", "DCF估值", "合规风控"]
+similarity, rec = match_user_job(user, job, kb)
+print(f"岗位匹配度: {similarity:.3f}, 推荐考点: {rec}")`,
+                language: "python"
+            },
+            {
+                name: "LoRA 轻量化微调",
+                code: `# 适配不同面试官性格（严肃/压力/友好）的低秩微调
+from peft import LoraConfig, get_peft_model, TaskType
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+base_model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen-7B-Chat")
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen-7B-Chat")
+
+lora_config = LoraConfig(
+    r=8,
+    lora_alpha=32,
+    target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],
+    lora_dropout=0.05,
+    bias="none",
+    task_type=TaskType.CAUSAL_LM
+)
+lora_model = get_peft_model(base_model, lora_config)
+
+# 分别训练三种性格的数据集后，可动态切换adapter
+# 推理时：
+# lora_model.load_adapter("path/to/pressure_adapter")
+# output = lora_model.generate(prompt, max_new_tokens=128)
+# 实测延迟 < 300ms`,
+                language: "python"
+            },
+            {
+                name: "Wav2Vec2 语音识别",
+                code: `# 实时转写面试者语音，支持中英文混合
+import torch
+import torchaudio
+from transformers import Wav2Vec2Processor, Wav2Vec2ForCTC
+
+class Speech2Text:
+    def __init__(self, model_name="facebook/wav2vec2-large-960h-lv60-self"):
+        self.processor = Wav2Vec2Processor.from_pretrained(model_name)
+        self.model = Wav2Vec2ForCTC.from_pretrained(model_name)
+        self.sample_rate = 16000
+
+    def transcribe(self, audio_path):
+        waveform, orig_sr = torchaudio.load(audio_path)
+        if orig_sr != self.sample_rate:
+            resampler = torchaudio.transforms.Resample(orig_sr, self.sample_rate)
+            waveform = resampler(waveform)
+        input_values = self.processor(waveform.squeeze(), return_tensors="pt", sampling_rate=self.sample_rate).input_values
+        with torch.no_grad():
+            logits = self.model(input_values).logits
+        pred_ids = torch.argmax(logits, dim=-1)
+        return self.processor.batch_decode(pred_ids)[0]
+
+# 使用示例
+stt = Speech2Text()
+text = stt.transcribe("user_answer.wav")
+print("用户回答:", text)`,
+                language: "python"
+            },
+            {
+                name: "MediaPipe + ResNet 表情识别",
+                code: `# 实时捕捉面部468个关键点 + 情绪分类
+import cv2
+import mediapipe as mp
+import torch
+import numpy as np
+
+class EmotionRecognizer:
+    def __init__(self, emotion_model_path):
+        self.face_mesh = mp.solutions.face_mesh.FaceMesh(static_image_mode=False, max_num_faces=1)
+        self.model = torch.jit.load(emotion_model_path)  # ResNet18 预训练
+        self.emotions = ["自信", "紧张", "自然", "僵硬", "愉悦"]
+
+    def predict(self, frame):
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = self.face_mesh.process(rgb)
+        if not results.multi_face_landmarks:
+            return None
+        landmarks = []
+        for lm in results.multi_face_landmarks[0].landmark:
+            landmarks.extend([lm.x, lm.y, lm.z])
+        input_tensor = torch.tensor(landmarks).float().unsqueeze(0)
+        with torch.no_grad():
+            logits = self.model(input_tensor)
+        idx = torch.argmax(logits, dim=1).item()
+        return self.emotions[idx]
+
+# 集成到面试流程中，根据情绪调整追问策略`,
+                language: "python"
+            },
+            {
+                name: "C4.5 决策树 (题型路由)",
+                code: `# 根据岗位类型、能力短板动态选择面试题型
+def build_decision_tree():
+    # 实际使用sklearn的DecisionTreeClassifier，此处展示决策逻辑
+    tree = {
+        "技术岗": {
+            "算法薄弱": "手写代码题+算法推导",
+            "系统设计薄弱": "设计短URL/秒杀系统",
+            "语言基础薄弱": "Java/Python核心特性问答"
+        },
+        "产品岗": {
+            "需求分析薄弱": "给定场景写PRD",
+            "数据分析薄弱": "指标拆解+AB测试设计",
+            "用户理解薄弱": "用户画像构建+调研方法"
+        },
+        "运营岗": {
+            "活动策划薄弱": "策划拉新活动方案",
+            "用户增长薄弱": "分析DAU下降并给出策略"
+        }
+    }
+    return tree
+
+def route_questions(role, weak_tags):
+    tree = build_decision_tree()
+    role_branch = tree.get(role, {})
+    questions = []
+    for tag in weak_tags:
+        if tag in role_branch:
+            questions.append(role_branch[tag])
+    return questions if questions else ["请做一个全面的自我介绍"]
+
+# 示例：技术岗，算法和系统设计薄弱 → 获取针对性题目`,
+                language: "python"
+            },
+            {
+                name: "协同过滤 + 内容推荐",
+                code: `# 混合推荐：协同过滤(用户行为) + 内容(考点标签特征)
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
+
+class HybridRecommender:
+    def __init__(self, user_item_matrix, item_features):
+        self.user_item = user_item_matrix  # 用户-考题评分矩阵
+        self.item_features = item_features  # 考题的特征向量（如技能标签embedding）
+    
+    def recommend(self, user_idx, top_k=5):
+        user_vec = self.user_item[user_idx].reshape(1, -1)
+        cf_sim = cosine_similarity(user_vec, self.user_item)[0]
+        # 内容相似度（基于考题特征）
+        content_sim = cosine_similarity(self.item_features)[user_idx]  # 简化示意
+        hybrid_score = 0.7 * cf_sim + 0.3 * content_sim
+        top_indices = np.argsort(hybrid_score)[::-1][:top_k]
+        return top_indices
+
+# 在平台中，每个用户每次面试后更新评分矩阵，实时调整推荐考点`,
+                language: "python"
+            },
+            {
+                name: "Python 爬虫 + NLP (动态知识库)",
+                code: `# 定时抓取招聘网站岗位JD和面经，更新知识库（示例框架）
+import requests
+from bs4 import BeautifulSoup
+import pymysql
+import time
+import random
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+
+# 数据库配置（实际使用时请修改为您的配置）
+DB_CONFIG = {
+    "host": "localhost",
+    "user": "root",
+    "password": "your_password",
+    "database": "mianshi",
+    "charset": "utf8mb4"
+}
+
+def init_driver():
+    options = webdriver.EdgeOptions()
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    driver = webdriver.Edge(options=options)
+    return driver
+
+def crawl_jd(driver, keyword):
+    """搜索岗位并提取招聘信息"""
+    url = f"https://q.yingjiesheng.com/jobs/search/{keyword}"
+    driver.get(url)
+    time.sleep(2)
+    items = driver.find_elements(By.CSS_SELECTOR, "a.search-list-href")[:10]
+    data = []
+    for item in items:
+        title = item.find_element(By.CSS_SELECTOR, "div.text-cut").text
+        link = item.get_attribute("href")
+        driver.execute_script("window.open('');")
+        driver.switch_to.window(driver.window_handles[1])
+        driver.get(link)
+        time.sleep(2)
+        content = driver.find_element(By.CSS_SELECTOR, "div.text").text
+        driver.close()
+        driver.switch_to.window(driver.window_handles[0])
+        data.append({"title": title, "content": content})
+    return data
+
+def save_to_mysql(data_list):
+    conn = pymysql.connect(**DB_CONFIG)
+    cursor = conn.cursor()
+    sql = "INSERT INTO job_infor (title, content) VALUES (%s, %s)"
+    for item in data_list:
+        cursor.execute(sql, (item["title"], item["content"]))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+if __name__ == "__main__":
+    driver = init_driver()
+    try:
+        job_data = crawl_jd(driver, "人工智能")
+        save_to_mysql(job_data)
+        print(f"成功入库 {len(job_data)} 条数据")
+    finally:
+        driver.quit()`,
+                language: "python"
+            }
+        ];
+
+        // 渲染左侧列表
+        const techListEl = document.getElementById('techList');
+        const codeBlock = document.getElementById('codeBlock');
+        const currentTechNameSpan = document.getElementById('currentTechName');
+        
+        function renderList() {
+            techListEl.innerHTML = '';
+            technologies.forEach((tech, idx) => {
+                const li = document.createElement('li');
+                li.textContent = tech.name;
+                li.dataset.index = idx;
+                li.addEventListener('click', () => {
+                    document.querySelectorAll('.tech-list li').forEach(l => l.classList.remove('active'));
+                    li.classList.add('active');
+                    showCode(tech);
+                });
+                techListEl.appendChild(li);
+            });
+            if(technologies.length) {
+                techListEl.children[0].classList.add('active');
+                showCode(technologies[0]);
+            }
+        }
+
+        function showCode(tech) {
+            currentTechNameSpan.textContent = tech.name;
+            codeBlock.textContent = tech.code;
+            codeBlock.className = `language-${tech.language || 'python'}`;
+            Prism.highlightElement(codeBlock);
+        }
+
+        // 复制代码
+        const copyBtn = document.getElementById('copyBtn');
+        copyBtn.addEventListener('click', async () => {
+            const code = codeBlock.textContent;
+            try {
+                await navigator.clipboard.writeText(code);
+                copyBtn.textContent = '✅ 已复制';
+                setTimeout(() => copyBtn.textContent = '📋 复制代码', 2000);
+            } catch (err) {
+                copyBtn.textContent = '❌ 失败';
+                setTimeout(() => copyBtn.textContent = '📋 复制代码', 2000);
+            }
+        });
+
+        // 二维码生成
+        function generateQR() {
+            const currentUrl = window.location.href;
+            const qrcodeDiv = document.getElementById('qrcode');
+            qrcodeDiv.innerHTML = '';
+            new QRCode(qrcodeDiv, {
+                text: currentUrl,
+                width: 48,
+                height: 48,
+                colorDark: "#000000",
+                colorLight: "#ffffff",
+                correctLevel: QRCode.CorrectLevel.M
+            });
+        }
+
+        window.addEventListener('load', () => {
+            renderList();
+            generateQR();
+        });
+    </script>
+</body>
+</html>
