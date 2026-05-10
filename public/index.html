@@ -387,6 +387,80 @@
     opacity: 0;
     pointer-events: none;
 }
+
+@media (min-width: 900px) {
+    body {
+        align-items: center;
+        padding: 24px;
+    }
+
+    .phone {
+        max-width: 1180px;
+        width: min(1180px, 100%);
+        height: calc(100vh - 48px);
+        min-height: 680px;
+        flex-direction: row;
+        border-radius: 18px;
+        overflow: hidden;
+    }
+
+    .content {
+        order: 2;
+        padding: 32px 40px;
+        max-width: 960px;
+        margin: 0 auto;
+    }
+
+    .bottom-nav {
+        order: 1;
+        width: 220px;
+        flex: 0 0 220px;
+        height: 100%;
+        flex-direction: column;
+        justify-content: flex-start;
+        align-items: stretch;
+        gap: 6px;
+        padding: 28px 16px;
+        border-top: 0;
+        border-right: 1px solid #e0f0e0;
+        box-shadow: 2px 0 12px rgba(0,30,0,0.03);
+    }
+
+    .nav-item {
+        flex-direction: row;
+        justify-content: flex-start;
+        gap: 12px;
+        padding: 12px 14px;
+        font-size: 14px;
+        border-radius: 12px;
+    }
+
+    .nav-item i {
+        width: 22px;
+        font-size: 18px;
+        text-align: center;
+    }
+
+    .nav-item.active {
+        background: #e8f3e5;
+    }
+
+    .knowledge-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 16px;
+    }
+
+    .mentor-row {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        overflow: visible;
+    }
+
+    .mentor-card,
+    .interviewer-card {
+        min-width: 0;
+    }
+}
     </style>
 </head>
 <body>
