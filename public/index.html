@@ -404,6 +404,18 @@
         let knowledgeData = [];
         let mentors = [];
         let interviewHistory = [];
+        const queryParams = new URLSearchParams(window.location.search);
+        const isDevPreview = queryParams.get('dev') === '1';
+        const previewTab = queryParams.get('tab') || 'home';
+
+        function getPreviewUser() {
+            return {
+                id: 1,
+                username: 'dev',
+                nickname: '开发预览',
+                points: 999
+            };
+        }
 
         // 面试官形象列表 - 使用本地照片（照片放在images文件夹中）
         // 找到代码中约40行附近的 interviewers 数组，替换为：
@@ -482,6 +494,18 @@ function hideSplashScreen() {
     // 先显示开场动画
     showSplashScreen();
     
+    if (isDevPreview) {
+        currentUser = getPreviewUser();
+        localStorage.setItem('currentUser', JSON.stringify(currentUser));
+        await loadInitialData();
+        setTimeout(() => {
+            renderMainApp();
+            loadTabContent(previewTab);
+            hideSplashScreen();
+        }, 500);
+        return;
+    }
+
     const savedUser = localStorage.getItem('currentUser');
     if (savedUser) {
         currentUser = JSON.parse(savedUser);
