@@ -15,6 +15,25 @@ const {
     buildFollowupMessages,
     buildResumeMessages
 } = require('./prompts');
+const { toArray, toJsonText, toSummaryText, parseJsonResponseSafe } = require('./utils');
+const {
+    fallbackResumeSummary,
+    normalizeResumeSummary,
+    serializeResumeRow
+} = require('./resumeService');
+const {
+    createJobTemplateService,
+    normalizeJobTemplateRow,
+    formatJobTemplateContext,
+    buildTemplateSummary
+} = require('./jobTemplateService');
+const {
+    createInterviewService,
+    formatKnowledgeContext,
+    fallbackQuestions: buildFallbackQuestions,
+    fallbackReport,
+    normalizeReport
+} = require('./interviewService');
 
 const app = express();
 app.use(cors());
@@ -29,6 +48,28 @@ const db = mysql.createPool({
     waitForConnections: true,
     connectionLimit: 10
 });
+
+const jobTemplateService = createJobTemplateService(db);
+const {
+    ensureJobTemplateTables,
+    getJobTemplateById,
+    matchJobTemplate
+} = jobTemplateService;
+
+const interviewService = createInterviewService({ db, getInterviewerProfile });
+const {
+    ensureInterviewSessionTables,
+    queryKnowledge,
+    saveInterviewRecord,
+    serializeSessionRow,
+    getSessionPayload,
+    saveInterviewTurn
+} = interviewService;
+
+function fallbackQuestions(options) {
+    return buildFallbackQuestions({ ...options, getInterviewerProfile });
+}
+
 
 function loadLocalEnv() {
     const envPath = path.join(__dirname, '..', '.env');
@@ -45,380 +86,6 @@ function loadLocalEnv() {
         let value = trimmed.slice(eqIndex + 1).trim();
         value = value.replace(/^['"]|['"]$/g, '');
         if (!process.env[key]) process.env[key] = value;
-    }
-}
-
-function toJsonText(value, fallback = null) {
-    if (value === undefined || value === null) {
-        return JSON.stringify(fallback);
-    }
-
-    if (typeof value === 'string') {
-        try {
-            JSON.parse(value);
-            return value;
-        } catch {
-            return JSON.stringify(value);
-        }
-    }
-
-    return JSON.stringify(value);
-}
-
-function toArray(value) {
-    if (Array.isArray(value)) return value;
-    if (!value) return [];
-    if (typeof value === 'string') {
-        try {
-            const parsed = JSON.parse(value);
-            return Array.isArray(parsed) ? parsed : [];
-        } catch {
-            return value.split(/\n+/).map((item) => item.trim()).filter(Boolean);
-        }
-    }
-    return [];
-}
-
-function clampScore(value, fallback = 70) {
-    const score = Number(value);
-    if (!Number.isFinite(score)) return fallback;
-    return Math.max(0, Math.min(100, Math.round(score)));
-}
-
-function toSummaryText(summary) {
-    if (!summary || typeof summary !== 'object') return '';
-    const parts = [
-        summary.summaryText,
-        summary.name ? `候选人: ${summary.name}` : '',
-        summary.targetPosition ? `目标岗位: ${summary.targetPosition}` : '',
-        toArray(summary.education).length ? `教育背景: ${toArray(summary.education).join('；')}` : '',
-        toArray(summary.projects).length ? `项目经历: ${toArray(summary.projects).join('；')}` : '',
-        toArray(summary.skills).length ? `技能标签: ${toArray(summary.skills).join('、')}` : '',
-        toArray(summary.highlights).length ? `优势亮点: ${toArray(summary.highlights).join('；')}` : '',
-        toArray(summary.weaknesses).length ? `潜在短板: ${toArray(summary.weaknesses).join('；')}` : ''
-    ].filter(Boolean);
-    return parts.join('\n').slice(0, 2000);
-}
-
-function uniqueItems(items, limit = 8) {
-    return [...new Set(items.map((item) => String(item).trim()).filter(Boolean))].slice(0, limit);
-}
-
-function extractSectionLines(text, keywords, stopKeywords = []) {
-    const lines = String(text || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    const result = [];
-    let collecting = false;
-    for (const line of lines) {
-        const isStart = keywords.some((keyword) => line.includes(keyword));
-        const isStop = collecting && stopKeywords.some((keyword) => line.includes(keyword));
-        if (isStart) {
-            collecting = true;
-            result.push(line.replace(/^[#\-\s：:]+/, ''));
-            continue;
-        }
-        if (isStop) collecting = false;
-        if (collecting && result.length < 5) result.push(line);
-    }
-    return uniqueItems(result, 5);
-}
-
-function fallbackResumeSummary({ resumeText, targetPosition, nickname }) {
-    const text = String(resumeText || '');
-    const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    const firstLine = lines.find((line) => /^[\u4e00-\u9fa5A-Za-z\s]{2,30}$/.test(line) && !/简历|求职|岗位|电话|邮箱/.test(line));
-    const emailName = text.match(/([A-Za-z0-9._%+-]+)@[A-Za-z0-9.-]+/)?.[1];
-    const name = firstLine || nickname || emailName || '求职者';
-    const roleMatch = text.match(/(?:目标岗位|求职意向|应聘岗位|岗位)[:：\s]*([^\n\r，,；;]{2,40})/);
-    const skills = uniqueItems(
-        (text.match(/JavaScript|TypeScript|React|Vue|Node\.?js|Express|MySQL|SQL|Python|Java|Spring|Linux|Docker|Redis|Excel|Tableau|PowerBI|产品|运营|数据分析|用户研究|项目管理|机器学习|深度学习|NLP/gi) || [])
-            .map((item) => item.replace(/^nodejs$/i, 'Node.js')),
-        10
-    );
-    const education = extractSectionLines(text, ['教育', '学历', '院校', '大学', '学院'], ['项目', '实习', '工作', '技能']);
-    const projects = extractSectionLines(text, ['项目', '实践', '作品', '经历'], ['教育', '技能', '证书', '自我评价']);
-    const highlights = [];
-    if (projects.length) highlights.push('具备可展开追问的项目或实践经历');
-    if (skills.length >= 3) highlights.push(`技能覆盖较完整，包括 ${skills.slice(0, 4).join('、')}`);
-    if (/\d+|%|百分|提升|增长|降低|优化|负责|主导/.test(text)) highlights.push('简历中包含一定结果或行动描述');
-
-    const weaknesses = [];
-    if (!targetPosition && !roleMatch) weaknesses.push('目标岗位还不够明确，建议补充求职意向');
-    if (!projects.length) weaknesses.push('项目经历信息偏少，面试中可能缺少案例支撑');
-    if (!/\d+|%|百分|提升|增长|降低/.test(text)) weaknesses.push('量化成果较少，建议补充数据化结果');
-
-    const summaryText = [
-        `${name}正在准备${targetPosition || roleMatch?.[1] || '目标岗位'}面试。`,
-        education.length ? `教育背景包含${education[0]}。` : '',
-        projects.length ? `主要经历包括${projects.slice(0, 2).join('；')}。` : '',
-        skills.length ? `核心技能包括${skills.slice(0, 6).join('、')}。` : ''
-    ].filter(Boolean).join('');
-
-    return {
-        name,
-        targetPosition: targetPosition || roleMatch?.[1] || '',
-        education,
-        projects,
-        skills,
-        highlights: highlights.length ? highlights : ['已提供基础简历文本，可用于定制面试问题'],
-        weaknesses: weaknesses.length ? weaknesses : ['可继续补充更明确的岗位关键词、量化成果和项目职责边界'],
-        summaryText: summaryText.slice(0, 180) || '已保存简历文本，后续面试可结合简历内容生成问题。'
-    };
-}
-
-function normalizeResumeSummary(raw, fallbackInput) {
-    const fallback = fallbackResumeSummary(fallbackInput);
-    if (!raw || typeof raw !== 'object') return fallback;
-    return {
-        name: raw.name || fallback.name,
-        targetPosition: raw.targetPosition || raw.position || fallback.targetPosition,
-        education: toArray(raw.education).length ? toArray(raw.education) : fallback.education,
-        projects: toArray(raw.projects || raw.projectExperience).length ? toArray(raw.projects || raw.projectExperience) : fallback.projects,
-        skills: toArray(raw.skills || raw.skillTags).length ? uniqueItems(toArray(raw.skills || raw.skillTags), 12) : fallback.skills,
-        highlights: toArray(raw.highlights || raw.strengths).length ? toArray(raw.highlights || raw.strengths) : fallback.highlights,
-        weaknesses: toArray(raw.weaknesses || raw.risks).length ? toArray(raw.weaknesses || raw.risks) : fallback.weaknesses,
-        summaryText: raw.summaryText || raw.summary || fallback.summaryText
-    };
-}
-
-function serializeResumeRow(row) {
-    if (!row) return null;
-    return {
-        ...row,
-        summary: parseJsonResponseSafe(row.summary_json, null)
-    };
-}
-
-function parseJsonResponseSafe(value, fallback) {
-    if (!value) return fallback;
-    if (typeof value !== 'string') return value;
-    try {
-        return JSON.parse(value);
-    } catch {
-        return fallback;
-    }
-}
-
-async function queryKnowledge({ position = '', company = '', jd = '', knowledgeId = null }) {
-    try {
-        if (knowledgeId) {
-            const [rows] = await db.promise().query(
-                'SELECT * FROM knowledge_base WHERE id = ? LIMIT 1',
-                [knowledgeId]
-            );
-            return rows;
-        }
-
-        const rawKeywords = `${position} ${company} ${jd}`.match(/[a-zA-Z0-9\u4e00-\u9fa5]{2,}/g) || [];
-        const keywords = [...new Set(rawKeywords)]
-            .filter((item) => !['岗位', '职责', '要求', '能力', '经验'].includes(item))
-            .slice(0, 6);
-
-        if (keywords.length === 0) {
-            const [rows] = await db.promise().query(
-                'SELECT * FROM knowledge_base ORDER BY created_at DESC LIMIT 5'
-            );
-            return rows;
-        }
-
-        const clauses = [];
-        const params = [];
-        for (const keyword of keywords) {
-            const like = `%${keyword}%`;
-            clauses.push('(position LIKE ? OR company LIKE ? OR interview_questions LIKE ? OR tags LIKE ?)');
-            params.push(like, like, like, like);
-        }
-
-        const [rows] = await db.promise().query(
-            `SELECT * FROM knowledge_base WHERE ${clauses.join(' OR ')} ORDER BY created_at DESC LIMIT 6`,
-            params
-        );
-        return rows;
-    } catch (error) {
-        console.warn('Knowledge query skipped:', error.message);
-        return [];
-    }
-}
-
-function formatKnowledgeContext(rows) {
-    return rows.map((item, index) => {
-        const questions = item.interview_questions || item.content || '';
-        return [
-            `资料${index + 1}`,
-            `岗位: ${item.position || '未知'}`,
-            `公司/场景: ${item.company || '通用'}`,
-            `类型: ${item.experience_type || '资料'}`,
-            `内容: ${String(questions).slice(0, 800)}`
-        ].join('\n');
-    }).join('\n\n');
-}
-
-function fallbackQuestions({ position, company, jd, interviewerId, questionCount = 6 }) {
-    const interviewer = getInterviewerProfile(interviewerId);
-    const jdKeywords = (jd || '').match(/[a-zA-Z0-9\u4e00-\u9fa5]{2,}/g) || [];
-    const keywords = [...new Set(jdKeywords)].slice(0, 4);
-    const role = `${company ? `${company} ` : ''}${position || '目标岗位'}`;
-
-    const questions = [
-        `请先做一个 1 分钟自我介绍，并突出你和${role}最匹配的经历。`,
-        `你为什么选择${role}？请结合岗位要求说明你的动机和准备。`,
-        keywords[0]
-            ? `JD 中提到“${keywords[0]}”，请结合你的项目或学习经历谈谈你如何应用它。`
-            : `请介绍一个最能体现你专业能力的项目，并说明你的具体贡献。`,
-        keywords[1]
-            ? `如果工作中遇到与“${keywords[1]}”相关的复杂问题，你会如何分析和推进？`
-            : `遇到压力较大、时间紧的任务时，你通常如何拆解并保证结果？`,
-        `请用 STAR 法则讲一个你解决困难或推动协作的真实案例。`,
-        `如果我是${interviewer.style}面试官，我会追问：你目前距离${role}还有哪些短板，准备怎么补？`,
-        `最后，你有什么想反问面试官的问题？`
-    ];
-
-    return questions.slice(0, Math.max(4, Math.min(8, questionCount)));
-}
-
-function fallbackReport({ type, questions, answers }) {
-    const questionList = toArray(questions);
-    const answerList = toArray(answers);
-    const reviews = questionList.map((question, index) => {
-        const answer = answerList[index] || '';
-        const lengthScore = answer.length > 220 ? 30 : answer.length > 120 ? 24 : answer.length > 60 ? 18 : answer.length > 20 ? 10 : 2;
-        const structureScore = /首先|其次|然后|最后|第一|第二|第三|STAR|情境|任务|行动|结果|因为|所以/.test(answer) ? 20 : 8;
-        const evidenceScore = /项目|经历|案例|数据|提升|降低|\d+|%|百分/.test(answer) ? 20 : 8;
-        const relevanceScore = answer ? 20 : 0;
-        const score = clampScore(20 + lengthScore + structureScore + evidenceScore + relevanceScore, 55);
-
-        return {
-            question,
-            answer,
-            score,
-            strengths: answer
-                ? ['能够正面回应问题', evidenceScore >= 20 ? '包含一定案例或结果信息' : '具备继续展开的基础']
-                : ['暂未作答'],
-            problems: [
-                structureScore < 20 ? '回答结构还不够清晰，可以用 STAR 或分点表达' : '结构基本清楚',
-                evidenceScore < 20 ? '具体案例、数字和岗位关键词还可以更多' : '证据支撑较好'
-            ],
-            optimizedAnswer: answer
-                ? `建议按照“背景-任务-行动-结果-岗位关联”重组：先交代场景，再说明你负责什么、采取了哪些行动、产生了什么结果，最后点出这段经历如何证明你适合${type || '目标岗位'}。`
-                : '建议至少用 3-4 句话回应：先表明观点，再结合经历举例，最后回扣岗位要求。',
-            followupSuggestion: '可以继续追问候选人在该经历中的具体责任、量化结果和复盘反思。'
-        };
-    });
-
-    const average = reviews.length
-        ? Math.round(reviews.reduce((sum, item) => sum + item.score, 0) / reviews.length)
-        : 0;
-
-    const dimensions = {
-        jobFit: clampScore(average + 2),
-        professional: clampScore(average + 4),
-        logic: clampScore(average - 2),
-        star: clampScore(average - 5),
-        adaptability: clampScore(average),
-        communication: clampScore(average + 1)
-    };
-
-    return {
-        totalScore: average,
-        dimensions,
-        summary: `本次${type || '模拟面试'}整体得分 ${average} 分。回答已经具备基础内容，但还需要进一步强化结构、案例细节和岗位匹配表达。`,
-        questionReviews: reviews,
-        strengths: ['能够完成主要问题回应', '具备继续打磨为正式面试答案的基础'],
-        weaknesses: ['部分回答缺少量化结果', 'STAR 结构和岗位回扣还可以更明确'],
-        trainingPlan: [
-            '把每个项目经历整理成 STAR 模板',
-            '为核心技能补充 2-3 个可量化成果',
-            '针对目标岗位准备 3 个反问问题'
-        ],
-        recommendedResources: ['岗位专项题库', 'STAR 法则表达训练', '真实面经案例库']
-    };
-}
-
-function normalizeReport(raw, fallbackInput) {
-    const fallback = fallbackReport(fallbackInput);
-    if (!raw || typeof raw !== 'object') return fallback;
-
-    const dimensions = raw.dimensions || {};
-    const normalized = {
-        totalScore: clampScore(raw.totalScore ?? raw.score, fallback.totalScore),
-        dimensions: {
-            jobFit: clampScore(dimensions.jobFit, fallback.dimensions.jobFit),
-            professional: clampScore(dimensions.professional, fallback.dimensions.professional),
-            logic: clampScore(dimensions.logic, fallback.dimensions.logic),
-            star: clampScore(dimensions.star, fallback.dimensions.star),
-            adaptability: clampScore(dimensions.adaptability, fallback.dimensions.adaptability),
-            communication: clampScore(dimensions.communication, fallback.dimensions.communication)
-        },
-        summary: raw.summary || fallback.summary,
-        questionReviews: Array.isArray(raw.questionReviews) && raw.questionReviews.length
-            ? raw.questionReviews.map((item, index) => ({
-                question: item.question || fallback.questionReviews[index]?.question || '',
-                answer: item.answer || fallback.questionReviews[index]?.answer || '',
-                score: clampScore(item.score, fallback.questionReviews[index]?.score || fallback.totalScore),
-                strengths: Array.isArray(item.strengths) ? item.strengths : fallback.questionReviews[index]?.strengths || [],
-                problems: Array.isArray(item.problems) ? item.problems : fallback.questionReviews[index]?.problems || [],
-                optimizedAnswer: item.optimizedAnswer || fallback.questionReviews[index]?.optimizedAnswer || '',
-                followupSuggestion: item.followupSuggestion || fallback.questionReviews[index]?.followupSuggestion || ''
-            }))
-            : fallback.questionReviews,
-        strengths: Array.isArray(raw.strengths) ? raw.strengths : fallback.strengths,
-        weaknesses: Array.isArray(raw.weaknesses) ? raw.weaknesses : fallback.weaknesses,
-        trainingPlan: Array.isArray(raw.trainingPlan) ? raw.trainingPlan : fallback.trainingPlan,
-        recommendedResources: Array.isArray(raw.recommendedResources) ? raw.recommendedResources : fallback.recommendedResources
-    };
-
-    return normalized;
-}
-
-async function saveInterviewRecord(payload) {
-    const {
-        userId,
-        type,
-        position,
-        company,
-        interviewerId,
-        jdText,
-        questions,
-        answers,
-        score,
-        aiReport,
-        metadata
-    } = payload;
-
-    const questionsText = toJsonText(questions, []);
-    const answersText = toJsonText(answers, []);
-    const reportText = aiReport ? toJsonText(aiReport, {}) : null;
-    const metadataText = metadata ? toJsonText(metadata, {}) : null;
-
-    try {
-        const [result] = await db.promise().query(
-            `INSERT INTO interview_records
-            (user_id, type, position, company, interviewer_id, jd_text, questions, answers, score, ai_report, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-                userId,
-                type,
-                position || type,
-                company || null,
-                interviewerId || null,
-                jdText || null,
-                questionsText,
-                answersText,
-                clampScore(score, 0),
-                reportText,
-                metadataText
-            ]
-        );
-        return result.insertId;
-    } catch (error) {
-        if (!/Unknown column|ER_BAD_FIELD_ERROR/i.test(error.message)) {
-            throw error;
-        }
-
-        const [result] = await db.promise().query(
-            'INSERT INTO interview_records (user_id, type, questions, answers, score) VALUES (?, ?, ?, ?, ?)',
-            [userId, type, questionsText, answersText, clampScore(score, 0)]
-        );
-        return result.insertId;
     }
 }
 
@@ -750,11 +417,49 @@ app.get('/api/resume/:id', async (req, res) => {
     }
 });
 
+app.get('/api/job-templates', async (req, res) => {
+    try {
+        const [rows] = await db.promise().query(
+            'SELECT * FROM job_templates ORDER BY popularity DESC, updated_at DESC'
+        );
+        res.json(rows.map(normalizeJobTemplateRow));
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/job-templates/search/:keyword', async (req, res) => {
+    try {
+        const keyword = `%${req.params.keyword || ''}%`;
+        const [rows] = await db.promise().query(
+            `SELECT * FROM job_templates
+            WHERE name LIKE ? OR industry LIKE ? OR keywords LIKE ? OR ability_model LIKE ?
+            ORDER BY popularity DESC, updated_at DESC
+            LIMIT 10`,
+            [keyword, keyword, keyword, keyword]
+        );
+        res.json(rows.map(normalizeJobTemplateRow));
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/job-templates/:id', async (req, res) => {
+    try {
+        const template = await getJobTemplateById(req.params.id);
+        if (!template) return res.status(404).json({ error: '岗位模板不存在' });
+        res.json(template);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 app.post('/api/ai/interview/generate', async (req, res) => {
     const {
         position,
         company,
         jd,
+        templateId,
         interviewerId,
         interviewer,
         knowledgeId,
@@ -768,6 +473,8 @@ app.post('/api/ai/interview/generate', async (req, res) => {
     }
 
     const profile = getInterviewerProfile(interviewerId || interviewer?.id);
+    const jobTemplate = await matchJobTemplate({ templateId, position, jd });
+    const jobTemplateContext = formatJobTemplateContext(jobTemplate);
     const knowledgeRows = await queryKnowledge({ position, company, jd, knowledgeId });
     const knowledgeContext = formatKnowledgeContext(knowledgeRows);
     let resolvedResumeSummary = resumeSummary || '';
@@ -786,7 +493,7 @@ app.post('/api/ai/interview/generate', async (req, res) => {
     const fallback = fallbackQuestions({
         position,
         company,
-        jd: [jd, resolvedResumeSummary].filter(Boolean).join('\n'),
+        jd: [jobTemplateContext, jd, resolvedResumeSummary].filter(Boolean).join('\n'),
         interviewerId: profile.id,
         questionCount: Number(questionCount) || 6
     });
@@ -797,6 +504,7 @@ app.post('/api/ai/interview/generate', async (req, res) => {
             company,
             jd,
             interviewer: profile,
+            jobTemplateContext,
             knowledgeContext,
             resumeSummary: resolvedResumeSummary,
             questionCount: Number(questionCount) || 6
@@ -813,6 +521,7 @@ app.post('/api/ai/interview/generate', async (req, res) => {
             interviewer: profile,
             questions: questions.length ? questions.slice(0, 8) : fallback,
             profile: parsed.profile || null,
+            template: buildTemplateSummary(jobTemplate),
             knowledgeUsed: knowledgeRows.map((item) => item.id)
         });
     } catch (error) {
@@ -823,6 +532,7 @@ app.post('/api/ai/interview/generate', async (req, res) => {
             interviewer: profile,
             questions: fallback,
             profile: null,
+            template: buildTemplateSummary(jobTemplate),
             warning: error.message
         });
     }
@@ -878,6 +588,8 @@ app.post('/api/ai/interview/report', async (req, res) => {
         position,
         company,
         jd,
+        templateId,
+        templateSummary,
         interviewerId,
         resumeId,
         resumeSummary,
@@ -898,6 +610,9 @@ app.post('/api/ai/interview/report', async (req, res) => {
 
     let report;
     let source = 'ai';
+    const jobTemplate = await matchJobTemplate({ templateId, position: position || type, jd });
+    const resolvedTemplateSummary = templateSummary || buildTemplateSummary(jobTemplate);
+    const jobTemplateContext = formatJobTemplateContext(jobTemplate || resolvedTemplateSummary);
 
     try {
         const knowledgeRows = await queryKnowledge({ position: position || type, company, jd });
@@ -910,6 +625,7 @@ app.post('/api/ai/interview/report', async (req, res) => {
             questions: questionList,
             answers: answerList,
             resumeSummary,
+            jobTemplateContext,
             knowledgeContext: formatKnowledgeContext(knowledgeRows)
         });
         const content = await callLLM({ messages, temperature: 0.25, responseFormat: 'json_object' });
@@ -934,7 +650,15 @@ app.post('/api/ai/interview/report', async (req, res) => {
                 answers: answerList,
                 score: report.totalScore,
                 aiReport: report,
-                metadata: { source, startedAt, finishedAt: new Date().toISOString(), resumeId: resumeId || null, resumeSummary: resumeSummary || null }
+                metadata: {
+                    source,
+                    startedAt,
+                    finishedAt: new Date().toISOString(),
+                    resumeId: resumeId || null,
+                    resumeSummary: resumeSummary || null,
+                    templateId: resolvedTemplateSummary?.id || templateId || null,
+                    templateSummary: resolvedTemplateSummary || null
+                }
             });
         } catch (error) {
             console.warn('Saving AI report failed:', error.message);
@@ -948,6 +672,243 @@ app.post('/api/ai/interview/report', async (req, res) => {
         interviewer: profile,
         report
     });
+});
+
+app.post('/api/interview/sessions', async (req, res) => {
+    const {
+        userId,
+        type,
+        position,
+        company,
+        jd,
+        jdText,
+        templateId,
+        templateSummary,
+        interviewerId,
+        resumeId,
+        resumeSummary,
+        questions = [],
+        aiSource
+    } = req.body;
+
+    const questionList = toArray(questions);
+    if (!userId) return res.status(400).json({ error: '缺少用户ID' });
+    if (!questionList.length) return res.status(400).json({ error: '缺少面试问题' });
+
+    try {
+        const jobTemplate = await matchJobTemplate({ templateId, position: position || type, jd: jdText || jd });
+        const resolvedTemplateSummary = templateSummary || buildTemplateSummary(jobTemplate);
+        const [result] = await db.promise().query(
+            `INSERT INTO interview_sessions
+            (user_id, type, position, company, interviewer_id, jd_text, template_id, template_summary, resume_id, resume_summary, questions, status, ai_source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'in_progress', ?)`,
+            [
+                userId,
+                type || position || 'AI面试',
+                position || type || null,
+                company || null,
+                interviewerId || null,
+                jdText || jd || null,
+                resolvedTemplateSummary?.id || templateId || null,
+                resolvedTemplateSummary ? toJsonText(resolvedTemplateSummary, {}) : null,
+                resumeId || null,
+                resumeSummary || null,
+                toJsonText(questionList, []),
+                aiSource || null
+            ]
+        );
+
+        res.json({ success: true, session: await getSessionPayload(result.insertId) });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/interview/sessions/:id', async (req, res) => {
+    try {
+        const session = await getSessionPayload(req.params.id);
+        if (!session) return res.status(404).json({ error: '会话不存在' });
+        res.json(session);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/interview/sessions/user/:userId', async (req, res) => {
+    try {
+        const [sessions] = await db.promise().query(
+            'SELECT * FROM interview_sessions WHERE user_id = ? ORDER BY updated_at DESC, started_at DESC',
+            [req.params.userId]
+        );
+        const sessionIds = sessions.map((item) => item.id);
+        let turns = [];
+        if (sessionIds.length) {
+            const [turnRows] = await db.promise().query(
+                `SELECT * FROM interview_turns WHERE session_id IN (${sessionIds.map(() => '?').join(',')}) ORDER BY session_id ASC, question_index ASC`,
+                sessionIds
+            );
+            turns = turnRows;
+        }
+        res.json(sessions.map((session) => serializeSessionRow(
+            session,
+            turns.filter((turn) => turn.session_id === session.id)
+        )));
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/interview/sessions/:id/turns', async (req, res) => {
+    try {
+        const session = await getSessionPayload(req.params.id);
+        if (!session) return res.status(404).json({ error: '会话不存在' });
+        if (session.status === 'finished') return res.status(400).json({ error: '面试已结束' });
+
+        await saveInterviewTurn(req.params.id, req.body);
+        res.json({ success: true, session: await getSessionPayload(req.params.id) });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/interview/sessions/:id/followup', async (req, res) => {
+    try {
+        const session = await getSessionPayload(req.params.id);
+        if (!session) return res.status(404).json({ error: '会话不存在' });
+        if (session.status === 'finished') return res.status(400).json({ error: '面试已结束' });
+
+        const {
+            questionIndex,
+            question,
+            answer,
+            previousQuestions = session.questions
+        } = req.body;
+        const profile = getInterviewerProfile(session.interviewer_id);
+        let followup = '请补充一个更具体的项目例子，并说明你的行动、结果和复盘。';
+        let source = 'fallback';
+
+        if (question && answer) {
+            await saveInterviewTurn(req.params.id, {
+                questionIndex,
+                question,
+                answer,
+                kind: req.body.kind || 'base',
+                aiSource: req.body.aiSource || null
+            });
+        }
+
+        try {
+            const messages = buildFollowupMessages({
+                position: session.position,
+                company: session.company,
+                interviewer: profile,
+                question,
+                answer,
+                resumeSummary: session.resume_summary,
+                previousQuestions
+            });
+            const content = await callLLM({ messages, temperature: 0.35, responseFormat: 'json_object' });
+            const parsed = parseJsonResponse(content);
+            followup = parsed.followup || followup;
+            source = 'ai';
+        } catch (error) {
+            console.warn('Session followup fallback:', error.message);
+        }
+
+        const allQuestions = session.questions.slice();
+        const insertAt = Math.min(allQuestions.length, Number(questionIndex) + 1);
+        allQuestions.splice(insertAt, 0, followup);
+        await db.promise().query(
+            'UPDATE interview_sessions SET questions = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+            [toJsonText(allQuestions, []), req.params.id]
+        );
+        await saveInterviewTurn(req.params.id, {
+            questionIndex: insertAt,
+            question: followup,
+            answer: '',
+            kind: 'followup',
+            aiSource: source
+        });
+
+        res.json({
+            success: true,
+            source,
+            followup,
+            session: await getSessionPayload(req.params.id)
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/interview/sessions/:id/finish', async (req, res) => {
+    try {
+        const session = await getSessionPayload(req.params.id);
+        if (!session) return res.status(404).json({ error: '会话不存在' });
+
+        const questionList = toArray(req.body.questions).length ? toArray(req.body.questions) : session.questions;
+        const answerList = toArray(req.body.answers).length ? toArray(req.body.answers) : session.answers;
+        const profile = getInterviewerProfile(session.interviewer_id);
+        const fallbackInput = {
+            type: session.type || session.position,
+            questions: questionList,
+            answers: answerList
+        };
+        let report;
+        let source = 'ai';
+        const jobTemplate = session.template_id
+            ? await getJobTemplateById(session.template_id)
+            : null;
+        const jobTemplateContext = formatJobTemplateContext(jobTemplate || session.template_summary);
+
+        try {
+            const knowledgeRows = await queryKnowledge({
+                position: session.position || session.type,
+                company: session.company,
+                jd: session.jd_text
+            });
+            const messages = buildReportMessages({
+                type: session.type || session.position,
+                position: session.position || session.type,
+                company: session.company,
+                jd: session.jd_text,
+                interviewer: profile,
+                questions: questionList,
+                answers: answerList,
+                resumeSummary: session.resume_summary,
+                jobTemplateContext,
+                knowledgeContext: formatKnowledgeContext(knowledgeRows)
+            });
+            const content = await callLLM({ messages, temperature: 0.25, responseFormat: 'json_object' });
+            report = normalizeReport(parseJsonResponse(content), fallbackInput);
+        } catch (error) {
+            source = 'fallback';
+            report = fallbackReport(fallbackInput);
+            report.warning = error.message;
+        }
+
+        await db.promise().query(
+            `UPDATE interview_sessions
+            SET questions = ?, status = 'finished', total_score = ?, ai_report = ?, ai_source = ?, finished_at = NOW(), updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?`,
+            [
+                toJsonText(questionList, []),
+                report.totalScore,
+                toJsonText(report, {}),
+                source,
+                req.params.id
+            ]
+        );
+
+        res.json({
+            success: true,
+            source,
+            report,
+            session: await getSessionPayload(req.params.id)
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
 });
 
 app.post('/api/interview/save', async (req, res) => {
@@ -987,11 +948,39 @@ app.post('/api/interview/save', async (req, res) => {
 
 app.get('/api/interview/history/:userId', async (req, res) => {
     try {
-        const [rows] = await db.promise().query(
+        const [sessions] = await db.promise().query(
+            'SELECT * FROM interview_sessions WHERE user_id = ? ORDER BY updated_at DESC, started_at DESC',
+            [req.params.userId]
+        );
+        const sessionIds = sessions.map((item) => item.id);
+        let turns = [];
+        if (sessionIds.length) {
+            const [turnRows] = await db.promise().query(
+                `SELECT * FROM interview_turns WHERE session_id IN (${sessionIds.map(() => '?').join(',')}) ORDER BY session_id ASC, question_index ASC`,
+                sessionIds
+            );
+            turns = turnRows;
+        }
+        const sessionRecords = sessions.map((session) => serializeSessionRow(
+            session,
+            turns.filter((turn) => turn.session_id === session.id)
+        ));
+
+        const [legacyRecords] = await db.promise().query(
             'SELECT * FROM interview_records WHERE user_id = ? ORDER BY created_at DESC',
             [req.params.userId]
         );
-        res.json(rows);
+        const normalizedLegacy = legacyRecords.map((record) => ({
+            ...record,
+            id: `record-${record.id}`,
+            recordId: record.id,
+            source_type: 'record'
+        }));
+        res.json([...sessionRecords, ...normalizedLegacy].sort((a, b) => {
+            const aTime = new Date(a.finished_at || a.updated_at || a.created_at).getTime();
+            const bTime = new Date(b.finished_at || b.updated_at || b.created_at).getTime();
+            return bTime - aTime;
+        }));
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -1004,6 +993,13 @@ app.get('/', (req, res) => {
 });
 
 const PORT = Number(process.env.PORT || 3000);
-app.listen(PORT, () => {
-    console.log(`职引官后端服务运行在 http://localhost:${PORT}`);
-});
+ensureInterviewSessionTables()
+    .then(ensureJobTemplateTables)
+    .catch((error) => {
+        console.warn('Interview/session template table initialization skipped:', error.message);
+    })
+    .finally(() => {
+        app.listen(PORT, () => {
+            console.log(`职引官后端服务运行在 http://localhost:${PORT}`);
+        });
+    });

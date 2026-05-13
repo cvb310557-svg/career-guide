@@ -40,6 +40,7 @@ function buildQuestionMessages({
     company,
     jd,
     interviewer,
+    jobTemplateContext,
     knowledgeContext,
     resumeSummary,
     questionCount = 6
@@ -69,6 +70,9 @@ function buildQuestionMessages({
                 '',
                 '候选人简历摘要:',
                 resumeSummary || '用户暂未提供简历，请按岗位通用要求生成。',
+                '',
+                '岗位模板:',
+                jobTemplateContext || '暂无岗位模板，请按岗位通用要求生成。',
                 '',
                 '可参考知识库资料:',
                 knowledgeContext || '暂无知识库命中资料。',
@@ -141,6 +145,7 @@ function buildReportMessages({
     questions,
     answers,
     resumeSummary,
+    jobTemplateContext,
     knowledgeContext
 }) {
     const qaText = questions.map((question, index) => {
@@ -171,6 +176,9 @@ function buildReportMessages({
                 '',
                 '候选人简历摘要:',
                 resumeSummary || '暂无简历摘要。',
+                '',
+                '岗位模板:',
+                jobTemplateContext || '暂无岗位模板。',
                 '',
                 '知识库参考:',
                 knowledgeContext || '暂无资料。',

@@ -1,7 +1,18 @@
-﻿// ==================== 全局配置 ====================
-        const API_BASE = 'http://localhost:3000/api';
+// ==================== Core config and helpers ====================
+        const {
+            API_BASE,
+            ACTIVE_SESSION_KEY,
+            getPreviewUser,
+            asArray,
+            parseJsonField,
+            escapeHTML,
+            renderSimpleList,
+            getRecordAIReport,
+            getHistoryRecordId,
+            getSessionNumericId
+        } = window.ZYGCore;
         
-        // ==================== 状态管理 ====================
+        // ==================== State management ====================
         let currentUser = null;
         let currentTab = 'interview';
         let forumPosts = [];
@@ -9,58 +20,50 @@
         let mentors = [];
         let interviewHistory = [];
         let resumes = [];
+        let jobTemplates = [];
         let currentResume = null;
         let activeVideoStream = null;
         const queryParams = new URLSearchParams(window.location.search);
         const isDevPreview = queryParams.get('dev') === '1';
         const previewTab = queryParams.get('tab') || 'interview';
-
-        function getPreviewUser() {
+        const sessionIdFromUrl = queryParams.get('sessionId');
+        function normalizeTemplate(template) {
+            if (!template) return null;
             return {
-                id: 1,
-                username: 'dev',
-                nickname: '开发预览',
-                points: 999
+                ...template,
+                ability_model: asArray(template.ability_model || template.abilityModel),
+                common_questions: asArray(template.common_questions || template.commonQuestions),
+                keywords: asArray(template.keywords),
+                training_advice: asArray(template.training_advice || template.trainingAdvice)
             };
         }
 
-        function asArray(value) {
-            return Array.isArray(value) ? value : [];
+        function getSelectedTemplate() {
+            const id = Number(document.getElementById('custom-template')?.value || 0);
+            return normalizeTemplate(jobTemplates.find(item => Number(item.id) === id));
         }
 
-        function parseJsonField(value, fallback) {
-            if (value === undefined || value === null) return fallback;
-            if (typeof value !== 'string') return value;
-
-            let parsed = value;
-            for (let i = 0; i < 2; i++) {
-                if (typeof parsed !== 'string') break;
-                try {
-                    parsed = JSON.parse(parsed);
-                } catch (error) {
-                    return fallback;
-                }
-            }
-            return parsed ?? fallback;
+        function getTemplateByKeyword(keyword) {
+            const text = String(keyword || '');
+            return normalizeTemplate(jobTemplates.find(item =>
+                text.includes(item.name) ||
+                item.name?.includes(text) ||
+                item.industry?.includes(text) ||
+                asArray(item.keywords).some(tag => text.includes(tag) || tag.includes(text))
+            ));
         }
 
-        function escapeHTML(value) {
-            return String(value ?? '')
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;')
-                .replace(/'/g, '&#39;');
-        }
-
-        function renderSimpleList(items) {
-            const list = asArray(items).filter(Boolean);
-            if (list.length === 0) return '<div style="color: #8aa08a;">暂无</div>';
-            return list.map(item => `<div style="margin: 6px 0;">• ${escapeHTML(item)}</div>`).join('');
-        }
-
-        function getRecordAIReport(record) {
-            return parseJsonField(record?.ai_report || record?.aiReport, null);
+        function buildTemplateSummary(template) {
+            const item = normalizeTemplate(template);
+            if (!item) return null;
+            return {
+                id: item.id,
+                name: item.name,
+                industry: item.industry,
+                abilityModel: item.ability_model,
+                keywords: item.keywords,
+                trainingAdvice: item.training_advice
+            };
         }
 
         // 面试官形象列表 - 使用本地照片（照片放在images文件夹中）
@@ -146,7 +149,11 @@ function hideSplashScreen() {
         await loadInitialData();
         setTimeout(() => {
             renderMainApp();
-            loadTabContent(previewTab);
+            if (sessionIdFromUrl) {
+                resumeInterviewSession(sessionIdFromUrl);
+            } else {
+                loadTabContent(previewTab);
+            }
             hideSplashScreen();
         }, 500);
         return;
@@ -159,7 +166,11 @@ function hideSplashScreen() {
         // 延迟加载主界面，让动画播放完
         setTimeout(() => {
             renderMainApp();
-            loadTabContent('interview');
+            if (sessionIdFromUrl) {
+                resumeInterviewSession(sessionIdFromUrl);
+            } else {
+                loadTabContent('interview');
+            }
             hideSplashScreen();
         }, 1500);
     } else {
@@ -197,6 +208,9 @@ function hideSplashScreen() {
                 // 加载导师
                 mentors = await fetchArray('/mentors');
 
+                // 加载岗位模板
+                jobTemplates = await fetchArray('/job-templates');
+
                 // 加载面试历史
                 if (currentUser) {
                     interviewHistory = await fetchArray(`/interview/history/${currentUser.id}`);
@@ -218,6 +232,11 @@ function hideSplashScreen() {
                 mentors = [
                     { id: 1, name: '赵老师', company: '腾讯', position: '产品策划', experience: '3年', rating: 4.9 },
                     { id: 2, name: '钱工', company: '阿里', position: 'Java架构', experience: '8年', rating: 5.0 }
+                ];
+                jobTemplates = [
+                    { id: 1, name: '产品经理', industry: '互联网', ability_model: ['用户洞察', '需求分析', '数据判断'], common_questions: ['请分析一款你常用产品的核心用户和增长机会。', '如果核心功能上线后留存下降，你会如何定位？'], keywords: ['产品经理', '用户研究', '数据分析'], training_advice: ['准备完整产品分析案例'] },
+                    { id: 2, name: 'Java开发', industry: '互联网技术', ability_model: ['Java基础', 'JVM', '并发编程'], common_questions: ['请介绍你最熟悉的后端项目。', 'JVM 内存区域如何划分？'], keywords: ['Java', 'Spring', 'MySQL'], training_advice: ['复盘一个后端项目架构'] },
+                    { id: 3, name: '金融数据分析', industry: '金融', ability_model: ['SQL', 'Python', '业务解释'], common_questions: ['请介绍一个数据分析项目。', '业务方不认可数据结论时你会如何沟通？'], keywords: ['金融', '数据分析', 'SQL'], training_advice: ['准备数据到业务建议案例'] }
                 ];
                 resumes = [];
                 currentResume = null;
@@ -1240,22 +1259,36 @@ function confirmEndVideoInterview() {
 }
         // ==================== AI面试板块（修改后，包含面试官形象和视频面试入口）====================
         function renderInterview(container) {
-            const practiceItems = asArray(knowledgeData).slice(0, 4);
+            const practiceItems = asArray(jobTemplates).length
+                ? asArray(jobTemplates).slice(0, 4).map(item => ({ ...item, source: 'template' }))
+                : asArray(knowledgeData).slice(0, 4).map(item => ({ ...item, source: 'knowledge' }));
+            const activeSessionId = localStorage.getItem(ACTIVE_SESSION_KEY);
 
             container.innerHTML = `
                 <div class="page-shell interview-workspace" style="padding: 8px 0 20px;">
+                    ${activeSessionId ? `
+                        <section class="card" style="display: flex; justify-content: space-between; gap: 12px; align-items: center; background: #f8fcf7;">
+                            <div>
+                                <div style="font-weight: 700; color: #2c6e2c;">有一场未完成的面试</div>
+                                <div style="font-size: 13px; color: #6d826d; margin-top: 4px;">继续后会恢复已保存进度；每道题切换时会自动保存。</div>
+                            </div>
+                            <button class="btn-primary" style="width: auto;" onclick="resumeInterviewSession('${escapeHTML(activeSessionId)}')">
+                                <i class="fas fa-play"></i> 继续
+                            </button>
+                        </section>
+                    ` : ''}
                     <section class="interview-topline">
                         <div class="section-title">
-                            <i class="fas fa-fire"></i> 热门岗位
+                            <i class="fas fa-fire"></i> 模板快速开始
                             <span style="margin-left: auto; font-size: 14px; color: #2c6e2c; cursor: pointer;" onclick="switchTab('knowledge')">查看全部</span>
                         </div>
                         <div class="hot-role-strip">
                             ${practiceItems.map(item => `
-                            <div class="knowledge-item hot-role-card" onclick="startInterviewFromKnowledge(${item.id})">
-                                <span class="company-tag">${item.company || '未知'}</span>
-                                <div class="position-name">${item.position || '岗位'}</div>
-                                <div class="question-preview">基于真实面经训练</div>
-                                <span class="type-badge">${item.experience_type || '面经'}</span>
+                            <div class="knowledge-item hot-role-card" onclick="${item.source === 'template' ? `startInterviewFromTemplate(${item.id})` : `startInterviewFromKnowledge(${item.id})`}">
+                                <span class="company-tag">${escapeHTML(item.industry || item.company || '通用')}</span>
+                                <div class="position-name">${escapeHTML(item.name || item.position || '岗位')}</div>
+                                <div class="question-preview">${item.source === 'template' ? '点击后生成题目并创建正式会话' : '基于真实面经训练'}</div>
+                                <span class="type-badge">${item.source === 'template' ? '模板' : (item.experience_type || '面经')}</span>
                             </div>
                             `).join('') || '<div style="grid-column: 1 / -1; text-align: center; color: #8aa08a; padding: 24px;">暂无练习数据</div>'}
                         </div>
@@ -1270,8 +1303,8 @@ function confirmEndVideoInterview() {
                                     <i class="fas fa-sliders"></i>
                                     <span>自定义岗位面试</span>
                                 </div>
-                                <div class="interview-card-title">岗位定制 AI 面试官</div>
-                                <p>基于真实面经与岗位 JD 生成问题，适合正式面试前的集中演练。</p>
+                                <div class="interview-card-title">自定义岗位开始</div>
+                                <p>填写岗位和 JD 后开始正式练习；AI 不可用时会自动切换本地题库。</p>
                                 <div class="role-chip-row">
                                     <span class="company-tag" onclick="startInterviewByType('互联网')">互联网</span>
                                     <span class="company-tag" onclick="startInterviewByType('公务员')">公务员</span>
@@ -1290,8 +1323,8 @@ function confirmEndVideoInterview() {
                                     <i class="fas fa-video"></i>
                                 </div>
                                 <div>
-                                    <div class="interview-card-title">视频面试 · 真人模拟</div>
-                                    <p>当前面试官：${selectedInterviewer.name}（${selectedInterviewer.style}）</p>
+                                    <div class="interview-card-title">视频面试 · 演示入口</div>
+                                    <p>当前面试官：${selectedInterviewer.name}（${selectedInterviewer.style}），正式闭环请从模板或自定义开始。</p>
                                 </div>
                                 <i class="fas fa-chevron-right"></i>
                             </div>
@@ -1328,14 +1361,21 @@ function confirmEndVideoInterview() {
                 const questions = parseJsonField(record.questions, []);
                 const report = getRecordAIReport(record);
                 const score = report?.totalScore ?? record.score ?? 0;
+                const recordId = getHistoryRecordId(record);
+                const isInProgress = record.status === 'in_progress' && record.sessionId;
+                const action = isInProgress
+                    ? `resumeInterviewSession('${escapeHTML(record.sessionId)}')`
+                    : `showInterviewReport('${escapeHTML(recordId)}')`;
                 return `
-                <div class="card" style="cursor: pointer;" onclick="showInterviewReport(${record.id})">
+                <div class="card" style="cursor: pointer;" onclick="${action}">
                     <div style="display: flex; justify-content: space-between;">
                         <div>
-                            <span class="company-tag">${record.type || '模拟面试'}</span>
-                            <span style="margin-left: 8px; font-weight: 600;">${score}分</span>
+                            <span class="company-tag">${escapeHTML(record.type || '模拟面试')}</span>
+                            <span style="margin-left: 8px; font-weight: 600; color: ${isInProgress ? '#c47a00' : '#2c6e2c'};">
+                                ${isInProgress ? '未完成，点击继续' : `${score}分`}
+                            </span>
                         </div>
-                        <span style="color: #8aa08a;">${new Date(record.created_at).toLocaleDateString()}</span>
+                        <span style="color: #8aa08a;">${new Date(record.finished_at || record.updated_at || record.created_at).toLocaleDateString()}</span>
                     </div>
                     <div style="margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap;">
                         ${asArray(questions).slice(0, 2).map(q => 
@@ -1348,6 +1388,11 @@ function confirmEndVideoInterview() {
 
         // ==================== 按类型开始面试 ====================
         function startInterviewByType(type) {
+            const template = getTemplateByKeyword(type);
+            if (template) {
+                startInterviewFromTemplate(template.id);
+                return;
+            }
             const relatedQuestions = knowledgeData.filter(k => 
                 k.position?.includes(type) || k.company?.includes(type)
             ).slice(0, 5);
@@ -1357,6 +1402,65 @@ function confirmEndVideoInterview() {
             } else {
                 const questions = relatedQuestions.map(k => k.interview_questions).join('\n\n').split('\n').filter(q => q.trim());
                 startInterview(type, questions.slice(0, 5), null, getActiveResumePayload());
+            }
+        }
+
+        async function startInterviewFromTemplate(id) {
+            const item = normalizeTemplate(jobTemplates.find(template => Number(template.id) === Number(id)));
+            if (!item) return;
+
+            const resumePayload = getActiveResumePayload();
+            const fallbackQuestions = item.common_questions.length ? item.common_questions : getDefaultQuestions(item.name);
+            showInterviewSessionLoading(`正在为${item.name || '岗位'}生成正式面试题`);
+
+            try {
+                const jd = [
+                    `岗位模板：${item.name}`,
+                    `行业：${item.industry || '通用'}`,
+                    `关键词：${item.keywords.join('、')}`,
+                    `能力模型：${item.ability_model.join('、')}`
+                ].join('\n');
+                const response = await fetch(`${API_BASE}/ai/interview/generate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        position: item.name || '岗位面试',
+                        company: item.industry || '',
+                        jd,
+                        templateId: item.id,
+                        resumeId: resumePayload.resumeId,
+                        resumeSummary: resumePayload.resumeSummary,
+                        interviewerId: selectedInterviewer.id,
+                        interviewer: selectedInterviewer,
+                        questionCount: 6
+                    })
+                });
+                const data = await response.json();
+                if (!response.ok || !data.success) throw new Error(data.error || '题目生成失败');
+                const generatedQuestions = asArray(data.questions).filter(Boolean);
+                if (!generatedQuestions.length) throw new Error('没有生成有效题目');
+
+                startInterview(item.name || '岗位面试', generatedQuestions.slice(0, 6), null, {
+                    ...resumePayload,
+                    position: item.name || '岗位面试',
+                    company: item.industry || '',
+                    jd,
+                    templateId: data.template?.id || item.id,
+                    templateSummary: data.template || buildTemplateSummary(item),
+                    aiProfile: data.profile,
+                    aiSource: data.source || 'template'
+                });
+            } catch (error) {
+                console.error('模板题目生成失败，使用本地模板题库:', error);
+                startInterview(item.name || '岗位面试', fallbackQuestions.slice(0, 6), null, {
+                    ...resumePayload,
+                    position: item.name || '岗位面试',
+                    company: item.industry || '',
+                    templateId: item.id,
+                    templateSummary: buildTemplateSummary(item),
+                    aiSource: 'local-template',
+                    sessionWarning: 'AI 题目生成暂时不可用，已使用本地模板题库继续。'
+                });
             }
         }
 
@@ -1385,6 +1489,12 @@ function confirmEndVideoInterview() {
 
                     <div class="card">
                         <h3 style="margin-bottom: 20px;">自定义面试</h3>
+                        <select id="custom-template" class="input-field" onchange="applyTemplateToCustomForm()">
+                            <option value="">选择岗位模板（可选）</option>
+                            ${asArray(jobTemplates).map(template => `
+                                <option value="${template.id}">${escapeHTML(template.name)} · ${escapeHTML(template.industry || '通用')}</option>
+                            `).join('')}
+                        </select>
                         <input type="text" id="custom-position" class="input-field" placeholder="输入岗位名称（如：Java开发）">
                         <input type="text" id="custom-company" class="input-field" placeholder="输入公司名称（可选）">
                         <textarea id="custom-jd" class="input-field" placeholder="粘贴职位描述（JD），AI会根据JD生成问题" rows="5"></textarea>
@@ -1398,11 +1508,29 @@ function confirmEndVideoInterview() {
             `;
         }
 
+        function applyTemplateToCustomForm() {
+            const template = getSelectedTemplate();
+            if (!template) return;
+            const positionInput = document.getElementById('custom-position');
+            const companyInput = document.getElementById('custom-company');
+            const jdInput = document.getElementById('custom-jd');
+            if (positionInput && !positionInput.value) positionInput.value = template.name || '';
+            if (companyInput && !companyInput.value) companyInput.value = template.industry || '';
+            if (jdInput && !jdInput.value) {
+                jdInput.value = [
+                    `岗位关键词：${template.keywords.join('、')}`,
+                    `能力模型：${template.ability_model.join('、')}`,
+                    `训练建议：${template.training_advice.join('；')}`
+                ].join('\n');
+            }
+        }
+
         // ==================== 根据JD生成面试题 ====================
         async function generateInterviewFromJD() {
             const position = document.getElementById('custom-position')?.value;
             const company = document.getElementById('custom-company')?.value;
             const jd = document.getElementById('custom-jd')?.value;
+            const selectedTemplate = getSelectedTemplate();
             const btn = document.getElementById('generate-interview-btn');
             const status = document.getElementById('ai-generate-status');
 
@@ -1428,6 +1556,7 @@ function confirmEndVideoInterview() {
                         position,
                         company,
                         jd,
+                        templateId: selectedTemplate?.id || null,
                         resumeId: resumePayload.resumeId,
                         resumeSummary: resumePayload.resumeSummary,
                         interviewerId: selectedInterviewer.id,
@@ -1452,6 +1581,8 @@ function confirmEndVideoInterview() {
                     jd,
                     resumeId: resumePayload.resumeId,
                     resumeSummary: resumePayload.resumeSummary,
+                    templateId: data.template?.id || selectedTemplate?.id || null,
+                    templateSummary: data.template || buildTemplateSummary(selectedTemplate),
                     aiProfile: data.profile,
                     aiSource: data.source
                 });
@@ -1467,6 +1598,8 @@ function confirmEndVideoInterview() {
                     jd,
                     resumeId: getActiveResumePayload().resumeId,
                     resumeSummary: getActiveResumePayload().resumeSummary,
+                    templateId: selectedTemplate?.id || null,
+                    templateSummary: buildTemplateSummary(selectedTemplate),
                     aiSource: 'local'
                 });
             } finally {
@@ -1479,6 +1612,10 @@ function confirmEndVideoInterview() {
 
         // ==================== 默认问题 ====================
         function getDefaultQuestions(type) {
+            const template = getTemplateByKeyword(type);
+            if (template?.common_questions?.length) {
+                return template.common_questions.slice(0, 6);
+            }
             const defaultQuestions = {
                 '互联网': ['请做一下自我介绍', '为什么选择互联网行业？', '你最大的优缺点是什么？', '如何看待加班？', '未来3-5年的职业规划'],
                 '公务员': ['请做自我介绍', '为什么选择考公务员？', '如何看待"放管服"改革？', '如果群众上访你怎么办？', '你的政治立场是什么？'],
@@ -1492,18 +1629,27 @@ function confirmEndVideoInterview() {
         }
 
         // ==================== 开始面试 ====================
-        function startInterview(type, questions, knowledgeId = null, options = {}) {
+        async function startInterview(type, questions, knowledgeId = null, options = {}) {
+            showInterviewSessionLoading('正在创建面试会话');
+            const questionList = asArray(questions).filter(Boolean);
+            if (!questionList.length) {
+                alert('暂时没有可用题目，请换一个岗位或稍后再试');
+                loadTabContent('interview');
+                return;
+            }
             currentInterview = {
                 type: type,
                 position: options.position || type,
                 company: options.company || '',
                 jd: options.jd || '',
+                templateId: options.templateId || null,
+                templateSummary: options.templateSummary || null,
                 resumeId: options.resumeId || null,
                 resumeSummary: options.resumeSummary || '',
-                questions: questions,
-                questionMeta: questions.map(() => ({ kind: 'base' })),
+                questions: questionList,
+                questionMeta: questionList.map(() => ({ kind: 'base' })),
                 currentIndex: 0,
-                answers: new Array(questions.length).fill(''),
+                answers: new Array(questionList.length).fill(''),
                 startTime: new Date(),
                 knowledgeId: knowledgeId,
                 interviewerId: selectedInterviewer.id,
@@ -1511,11 +1657,140 @@ function confirmEndVideoInterview() {
                 aiSource: options.aiSource || null,
                 aiReport: null,
                 recordId: null,
+                sessionId: null,
+                sessionWarning: options.sessionWarning || '',
                 followupsUsed: 0,
                 maxFollowups: options.maxFollowups ?? 1
             };
 
+            if (currentUser?.id) {
+                try {
+                    const response = await fetch(`${API_BASE}/interview/sessions`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            userId: currentUser.id,
+                            type,
+                            position: currentInterview.position,
+                            company: currentInterview.company,
+                            jd: currentInterview.jd,
+                            templateId: currentInterview.templateId,
+                            templateSummary: currentInterview.templateSummary,
+                            interviewerId: currentInterview.interviewerId,
+                            resumeId: currentInterview.resumeId,
+                            resumeSummary: currentInterview.resumeSummary,
+                            questions: questionList,
+                            aiSource: currentInterview.aiSource
+                        })
+                    });
+                    const data = await response.json();
+                    if (response.ok && data.success && data.session) {
+                        currentInterview.sessionId = data.session.sessionId;
+                        localStorage.setItem(ACTIVE_SESSION_KEY, String(data.session.sessionId));
+                    } else {
+                        currentInterview.sessionWarning = data.error || '会话创建失败，本次将以本地临时面试继续。';
+                    }
+                } catch (error) {
+                    console.error('创建面试会话失败，继续使用本地流程:', error);
+                    currentInterview.sessionWarning = '数据库暂时不可用，本次将以本地临时面试继续，刷新页面可能无法恢复。';
+                }
+            } else {
+                currentInterview.sessionWarning = '当前未登录，本次可以完整练习，但不会写入历史记录。';
+            }
+
             showInterviewQuestion();
+        }
+
+        function showInterviewSessionLoading(text = '正在恢复面试会话') {
+            const contentDiv = document.getElementById('main-content');
+            if (!contentDiv) return;
+            contentDiv.innerHTML = `
+                <div class="page-shell" style="padding: 8px 0 20px;">
+                    <div class="card" style="text-align: center; padding: 40px 24px;">
+                        <i class="fas fa-spinner fa-spin" style="font-size: 36px; color: #2c6e2c; margin-bottom: 16px;"></i>
+                        <h3>${text}</h3>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function resumeInterviewSession(sessionId) {
+            showInterviewSessionLoading();
+            try {
+                const response = await fetch(`${API_BASE}/interview/sessions/${getSessionNumericId(sessionId)}`);
+                const session = await response.json();
+                if (!response.ok || !session?.sessionId) throw new Error(session.error || '会话不存在');
+                if (session.status === 'finished') {
+                    if (currentUser?.id) interviewHistory = await fetchArray(`/interview/history/${currentUser.id}`);
+                    showInterviewReport(session.id);
+                    return;
+                }
+
+                const questions = asArray(parseJsonField(session.questions, []));
+                const answers = asArray(parseJsonField(session.answers, []));
+                const turns = asArray(session.turns);
+                const firstOpenIndex = questions.findIndex((_, index) => !answers[index]);
+                const currentIndex = firstOpenIndex === -1 ? Math.max(0, questions.length - 1) : firstOpenIndex;
+                selectedInterviewer = interviewers.find(iv => iv.id === session.interviewer_id) || selectedInterviewer;
+
+                currentInterview = {
+                    type: session.type || session.position || 'AI面试',
+                    position: session.position || session.type || 'AI面试',
+                    company: session.company || '',
+                    jd: session.jd_text || '',
+                    templateId: session.template_id || session.metadata?.templateId || null,
+                    templateSummary: session.template_summary || session.metadata?.templateSummary || null,
+                    resumeId: session.resume_id || session.metadata?.resumeId || null,
+                    resumeSummary: session.resume_summary || session.metadata?.resumeSummary || '',
+                    questions,
+                    questionMeta: questions.map((_, index) => {
+                        const turn = turns.find(item => item.questionIndex === index);
+                        return { kind: turn?.kind || 'base', source: turn?.aiSource || null };
+                    }),
+                    currentIndex,
+                    answers: questions.map((_, index) => answers[index] || ''),
+                    startTime: session.started_at ? new Date(session.started_at) : new Date(),
+                    knowledgeId: null,
+                    interviewerId: session.interviewer_id || selectedInterviewer.id,
+                    aiProfile: null,
+                    aiSource: session.ai_source || null,
+                    aiReport: null,
+                    recordId: null,
+                    sessionId: session.sessionId,
+                    sessionWarning: '',
+                    followupsUsed: turns.filter(item => item.kind === 'followup').length,
+                    maxFollowups: 1
+                };
+                localStorage.setItem(ACTIVE_SESSION_KEY, String(session.sessionId));
+                showInterviewQuestion();
+            } catch (error) {
+                console.error('恢复面试失败:', error);
+                localStorage.removeItem(ACTIVE_SESSION_KEY);
+                alert('恢复面试失败，请重新开始一次模拟面试');
+                loadTabContent('interview');
+            }
+        }
+
+        async function saveCurrentTurn() {
+            if (!currentInterview?.sessionId) return;
+            const index = currentInterview.currentIndex;
+            const question = currentInterview.questions[index];
+            if (!question) return;
+            try {
+                await fetch(`${API_BASE}/interview/sessions/${currentInterview.sessionId}/turns`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        questionIndex: index,
+                        question,
+                        answer: currentInterview.answers[index] || '',
+                        kind: currentInterview.questionMeta?.[index]?.kind || 'base',
+                        aiSource: currentInterview.questionMeta?.[index]?.source || currentInterview.aiSource || null
+                    })
+                });
+            } catch (error) {
+                console.error('保存当前答题轮次失败:', error);
+            }
         }
 
         // ==================== 显示面试问题（使用当前选中的面试官照片）====================
@@ -1531,6 +1806,11 @@ function confirmEndVideoInterview() {
                     </div>
 
                     <div class="card" style="text-align: center;">
+                        ${currentInterview.sessionWarning ? `
+                            <div style="background: #fff9e6; color: #8a5a00; border-radius: 12px; padding: 10px 12px; margin-bottom: 16px; text-align: left; font-size: 13px;">
+                                <i class="fas fa-circle-info"></i> ${escapeHTML(currentInterview.sessionWarning)}
+                            </div>
+                        ` : ''}
                         <!-- 进度条 -->
                         <div style="margin-bottom: 20px;">
                             <div style="display: flex; justify-content: space-between; font-size: 14px;">
@@ -1639,12 +1919,13 @@ function confirmEndVideoInterview() {
         }
 
         // ==================== 上一题 ====================
-        function previousQuestion() {
+        async function previousQuestion() {
             if (currentInterview.currentIndex > 0) {
                 const answer = document.getElementById('interview-answer')?.value;
                 if (answer !== undefined) {
                     currentInterview.answers[currentInterview.currentIndex] = answer;
                 }
+                await saveCurrentTurn();
                 currentInterview.currentIndex--;
                 showInterviewQuestion();
             }
@@ -1658,7 +1939,10 @@ function confirmEndVideoInterview() {
             if (!answer || answer.trim().length < 40) return false;
 
             try {
-                const response = await fetch(`${API_BASE}/ai/interview/followup`, {
+                const endpoint = currentInterview.sessionId
+                    ? `/interview/sessions/${currentInterview.sessionId}/followup`
+                    : '/ai/interview/followup';
+                const response = await fetch(`${API_BASE}${endpoint}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -1666,8 +1950,10 @@ function confirmEndVideoInterview() {
                         company: currentInterview.company,
                         interviewerId: currentInterview.interviewerId || selectedInterviewer.id,
                         resumeSummary: currentInterview.resumeSummary,
+                        questionIndex: currentInterview.currentIndex,
                         question: currentInterview.questions[currentInterview.currentIndex],
                         answer,
+                        kind: meta?.kind || 'base',
                         previousQuestions: currentInterview.questions.slice(0, currentInterview.currentIndex + 1)
                     })
                 });
@@ -1690,6 +1976,7 @@ function confirmEndVideoInterview() {
             if (answer !== undefined) {
                 currentInterview.answers[currentInterview.currentIndex] = answer;
             }
+            await saveCurrentTurn();
 
             if (currentInterview.currentIndex === currentInterview.questions.length - 1) {
                 finishInterview();
@@ -1707,9 +1994,13 @@ function confirmEndVideoInterview() {
 
         // ==================== 完成面试 ====================
         async function finishInterview() {
+            await saveCurrentTurn();
             showReportGenerating();
             try {
-                const response = await fetch(`${API_BASE}/ai/interview/report`, {
+                const endpoint = currentInterview.sessionId
+                    ? `/interview/sessions/${currentInterview.sessionId}/finish`
+                    : '/ai/interview/report';
+                const response = await fetch(`${API_BASE}${endpoint}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -1718,13 +2009,15 @@ function confirmEndVideoInterview() {
                         position: currentInterview.position,
                         company: currentInterview.company,
                         jd: currentInterview.jd,
+                        templateId: currentInterview.templateId,
+                        templateSummary: currentInterview.templateSummary,
                         interviewerId: currentInterview.interviewerId || selectedInterviewer.id,
                         resumeId: currentInterview.resumeId,
                         resumeSummary: currentInterview.resumeSummary,
                         questions: currentInterview.questions,
                         answers: currentInterview.answers,
                         startedAt: currentInterview.startTime,
-                        save: true
+                        save: !currentInterview.sessionId
                     })
                 });
 
@@ -1734,7 +2027,10 @@ function confirmEndVideoInterview() {
                 }
 
                 currentInterview.aiReport = data.report;
-                currentInterview.recordId = data.recordId;
+                currentInterview.recordId = data.session?.id || data.recordId;
+                if (currentInterview.sessionId) {
+                    localStorage.removeItem(ACTIVE_SESSION_KEY);
+                }
 
                 if (currentUser?.id) {
                     const historyRes = await fetch(`${API_BASE}/interview/history/${currentUser.id}`);
@@ -1742,18 +2038,28 @@ function confirmEndVideoInterview() {
                 }
 
                 showInterviewReport(null, {
-                    id: data.recordId,
+                    id: data.session?.id || data.recordId,
+                    sessionId: data.session?.sessionId || currentInterview.sessionId,
+                    source_type: currentInterview.sessionId ? 'session' : 'record',
                     type: currentInterview.type,
                     position: currentInterview.position,
                     company: currentInterview.company,
                     interviewer_id: currentInterview.interviewerId,
                     jd_text: currentInterview.jd,
-                    metadata: { resumeId: currentInterview.resumeId, resumeSummary: currentInterview.resumeSummary },
+                    template_id: currentInterview.templateId,
+                    template_summary: currentInterview.templateSummary,
+                    metadata: {
+                        resumeId: currentInterview.resumeId,
+                        resumeSummary: currentInterview.resumeSummary,
+                        templateId: currentInterview.templateId,
+                        templateSummary: currentInterview.templateSummary
+                    },
                     questions: currentInterview.questions,
                     answers: currentInterview.answers,
                     score: data.report?.totalScore || 0,
                     ai_report: data.report,
-                    created_at: new Date()
+                    created_at: new Date(),
+                    finished_at: new Date()
                 });
 
             } catch (error) {
@@ -1968,8 +2274,9 @@ function renderAbilityAnalysis(score) {
     }
 }
         // ==================== 确认结束面试 ====================
-        function confirmEndInterview() {
-            if (confirm('确定要结束面试吗？当前进度将不会保存')) {
+        async function confirmEndInterview() {
+            if (confirm('确定要结束面试吗？已回答内容会保存在当前会话中，可稍后恢复。')) {
+                await saveCurrentTurn();
                 loadTabContent('interview');
             }
         }
@@ -2013,7 +2320,7 @@ function renderAbilityAnalysis(score) {
         function showInterviewReport(recordId, tempRecord = null) {
             let record = tempRecord;
             if (recordId) {
-                record = interviewHistory.find(r => r.id === recordId);
+                record = interviewHistory.find(r => getHistoryRecordId(r) === String(recordId));
             }
 
             if (!record) return;
@@ -2042,7 +2349,7 @@ function renderAbilityAnalysis(score) {
                             <span class="points-badge">得分: ${score}</span>
                         </div>
                         <div style="color: #8aa08a; margin: 8px 0 16px;">
-                            ${record.type} · ${new Date(record.created_at).toLocaleString()}
+                            ${record.type} · ${new Date(record.finished_at || record.updated_at || record.created_at).toLocaleString()}
                         </div>
 
                         <!-- 雷达图容器 -->
@@ -2195,21 +2502,26 @@ function renderAbilityAnalysis(score) {
                     ${interviewHistory.length === 0 ? `
                         <div class="card" style="text-align: center; padding: 40px;">
                             <i class="fas fa-inbox" style="font-size: 48px; color: #8aa08a;"></i>
-                            <p style="margin-top: 16px;">暂无面试记录</p>
+                            <p style="margin-top: 16px;">暂无面试记录。可以从模板快速开始或自定义岗位开始第一场正式面试。</p>
                         </div>
                     ` : interviewHistory.map(record => {
                         const report = getRecordAIReport(record);
                         const score = report?.totalScore ?? record.score ?? 0;
+                        const recordId = getHistoryRecordId(record);
+                        const isInProgress = record.status === 'in_progress' && record.sessionId;
+                        const action = isInProgress
+                            ? `resumeInterviewSession('${escapeHTML(record.sessionId)}')`
+                            : `showInterviewReport('${escapeHTML(recordId)}')`;
                         return `
-                        <div class="card" style="cursor: pointer;" onclick="showInterviewReport(${record.id})">
+                        <div class="card" style="cursor: pointer;" onclick="${action}">
                             <div style="display: flex; justify-content: space-between;">
-                                <span class="company-tag">${record.type}</span>
-                                <span style="font-weight: 600; color: ${score >= 80 ? '#2c6e2c' : score >= 60 ? '#f5b342' : '#c00'}">
-                                    ${score}分
+                                <span class="company-tag">${escapeHTML(record.type || '模拟面试')}</span>
+                                <span style="font-weight: 600; color: ${isInProgress ? '#c47a00' : score >= 80 ? '#2c6e2c' : score >= 60 ? '#f5b342' : '#c00'}">
+                                    ${isInProgress ? '继续答题' : `${score}分`}
                                 </span>
                             </div>
                             <div style="margin-top: 12px; color: #4f6b4f;">
-                                ${new Date(record.created_at).toLocaleString()}
+                                ${new Date(record.finished_at || record.updated_at || record.created_at).toLocaleString()}
                             </div>
                         </div>
                     `}).join('')}
