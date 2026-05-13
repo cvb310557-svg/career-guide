@@ -8,6 +8,8 @@
         let knowledgeData = [];
         let mentors = [];
         let interviewHistory = [];
+        let resumes = [];
+        let currentResume = null;
         let activeVideoStream = null;
         const queryParams = new URLSearchParams(window.location.search);
         const isDevPreview = queryParams.get('dev') === '1';
@@ -198,6 +200,8 @@ function hideSplashScreen() {
                 // 加载面试历史
                 if (currentUser) {
                     interviewHistory = await fetchArray(`/interview/history/${currentUser.id}`);
+                    resumes = await fetchArray(`/resumes/${currentUser.id}`);
+                    currentResume = resumes[0] || null;
                 }
             } catch (error) {
                 console.error('加载数据失败:', error);
@@ -215,6 +219,8 @@ function hideSplashScreen() {
                     { id: 1, name: '赵老师', company: '腾讯', position: '产品策划', experience: '3年', rating: 4.9 },
                     { id: 2, name: '钱工', company: '阿里', position: 'Java架构', experience: '8年', rating: 5.0 }
                 ];
+                resumes = [];
+                currentResume = null;
             }
         }
 
@@ -856,8 +862,53 @@ case 'profile':
         }
 
         function renderResumePreview() {
+            const summary = currentResume?.summary || parseJsonField(currentResume?.summary_json, null);
+            const displayName = summary?.name || currentUser?.nickname || currentUser?.username || '求职者';
+            const skills = asArray(summary?.skills).slice(0, 6);
+            const highlights = asArray(summary?.highlights).slice(0, 2);
+            const weaknesses = asArray(summary?.weaknesses).slice(0, 2);
+
+            if (currentResume && summary) {
+                return `
+                    <div class="resume-panel card">
+                        <div class="panel-heading">
+                            <i class="fas fa-file-lines"></i>
+                            <span>用户简历</span>
+                            <button class="resume-mini-action" onclick="openResumeEditor(event)" title="更新简历">
+                                <i class="fas fa-pen"></i>
+                            </button>
+                        </div>
+                        <div class="resume-preview">
+                            <div class="resume-avatar">${displayName.charAt(0)}</div>
+                            <div>
+                                <div style="font-weight: 800; font-size: 20px;">${escapeHTML(displayName)}</div>
+                                <div style="color: #5c715c; margin-top: 6px;">${escapeHTML(summary.targetPosition || currentResume.target_position || '目标岗位待补充')}</div>
+                            </div>
+                        </div>
+                        <div class="resume-summary-box">
+                            <div class="resume-summary-text">${escapeHTML(summary.summaryText || currentResume.summary_text || '已保存简历摘要。')}</div>
+                            <div class="resume-chip-row">
+                                ${skills.map(skill => `<span>${escapeHTML(skill)}</span>`).join('') || '<span>技能待补充</span>'}
+                            </div>
+                        </div>
+                        <div class="resume-mini-section">
+                            <strong>优势亮点</strong>
+                            ${renderSimpleList(highlights)}
+                        </div>
+                        <div class="resume-mini-section">
+                            <strong>潜在短板</strong>
+                            ${renderSimpleList(weaknesses)}
+                        </div>
+                        <div class="resume-action" onclick="showResumeDetail(event)">
+                            <i class="fas fa-eye"></i>
+                            查看解析结果
+                        </div>
+                    </div>
+                `;
+            }
+
             return `
-                <div class="resume-panel card" onclick="alert('简历上传与缩略显示功能将在后续开发中接入')">
+                <div class="resume-panel card" onclick="openResumeEditor(event)">
                     <div class="panel-heading">
                         <i class="fas fa-file-lines"></i>
                         <span>用户简历</span>
@@ -877,7 +928,164 @@ case 'profile':
                     </div>
                     <div class="resume-action">
                         <i class="fas fa-upload"></i>
-                        点击设置自己的简历
+                        点击上传或粘贴简历
+                    </div>
+                </div>
+            `;
+        }
+
+        function getActiveResumePayload() {
+            const summary = currentResume?.summary || parseJsonField(currentResume?.summary_json, null);
+            return {
+                resumeId: currentResume?.id || null,
+                resumeSummary: summary
+                    ? [
+                        summary.summaryText,
+                        summary.name ? `姓名/昵称: ${summary.name}` : '',
+                        summary.targetPosition ? `目标岗位: ${summary.targetPosition}` : '',
+                        asArray(summary.education).length ? `教育背景: ${asArray(summary.education).join('；')}` : '',
+                        asArray(summary.projects).length ? `项目经历: ${asArray(summary.projects).join('；')}` : '',
+                        asArray(summary.skills).length ? `技能标签: ${asArray(summary.skills).join('、')}` : '',
+                        asArray(summary.highlights).length ? `优势亮点: ${asArray(summary.highlights).join('；')}` : '',
+                        asArray(summary.weaknesses).length ? `潜在短板: ${asArray(summary.weaknesses).join('；')}` : ''
+                    ].filter(Boolean).join('\n')
+                    : ''
+            };
+        }
+
+        function openResumeEditor(event) {
+            event?.stopPropagation();
+            const contentDiv = document.getElementById('main-content');
+            const summary = currentResume?.summary || parseJsonField(currentResume?.summary_json, null);
+            contentDiv.innerHTML = `
+                <div class="page-shell" style="padding: 8px 0 20px;">
+                    <div class="back-btn" onclick="loadTabContent('interview')">
+                        <i class="fas fa-arrow-left"></i> 返回AI面试
+                    </div>
+
+                    <div class="card resume-editor-card">
+                        <div class="panel-heading">
+                            <i class="fas fa-file-arrow-up"></i>
+                            <span>简历上传与解析</span>
+                        </div>
+                        <input type="text" id="resume-target-position" class="input-field" placeholder="目标岗位（可选）" value="${escapeHTML(summary?.targetPosition || currentResume?.target_position || '')}">
+                        <input type="file" id="resume-file-input" class="input-field" accept=".txt,text/plain">
+                        <textarea id="resume-text-input" class="input-field" rows="12" placeholder="粘贴纯文本简历，或上传 txt 文件后自动填入">${escapeHTML(currentResume?.raw_text || '')}</textarea>
+                        <div id="resume-upload-status" style="font-size: 13px; color: #4f6b4f; margin: 4px 0 14px;">当前先支持纯文本和 txt 文件；pdf/docx 可后续扩展文本提取。</div>
+                        <button class="btn-primary" id="resume-submit-btn" onclick="submitResume()">
+                            <i class="fas fa-wand-magic-sparkles"></i> 保存并解析简历
+                        </button>
+                    </div>
+                </div>
+            `;
+
+            document.getElementById('resume-file-input')?.addEventListener('change', async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                if (!file.name.toLowerCase().endsWith('.txt') && file.type !== 'text/plain') {
+                    alert('当前版本先支持 txt 文件，请将简历内容复制为纯文本后上传。');
+                    e.target.value = '';
+                    return;
+                }
+                const text = await file.text();
+                const textarea = document.getElementById('resume-text-input');
+                if (textarea) textarea.value = text;
+            });
+        }
+
+        async function submitResume() {
+            const text = document.getElementById('resume-text-input')?.value?.trim();
+            const targetPosition = document.getElementById('resume-target-position')?.value?.trim();
+            const file = document.getElementById('resume-file-input')?.files?.[0];
+            const btn = document.getElementById('resume-submit-btn');
+            const status = document.getElementById('resume-upload-status');
+
+            if (!currentUser?.id) {
+                alert('请先登录后再上传简历');
+                return;
+            }
+            if (!text) {
+                alert('请粘贴简历文本或上传 txt 文件');
+                return;
+            }
+
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 正在解析简历...';
+            }
+            if (status) status.textContent = '正在保存简历并生成摘要，AI不可用时会自动使用本地解析。';
+
+            try {
+                const response = await fetch(`${API_BASE}/resumes`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        userId: currentUser.id,
+                        nickname: currentUser.nickname || currentUser.username,
+                        text,
+                        targetPosition,
+                        fileName: file?.name || null,
+                        sourceType: file ? 'txt' : 'text'
+                    })
+                });
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.error || '简历解析失败');
+                }
+
+                resumes = await fetchArray(`/resumes/${currentUser.id}`);
+                currentResume = resumes[0] || data.resume;
+                loadTabContent('interview');
+            } catch (error) {
+                console.error('保存简历失败:', error);
+                if (status) status.textContent = error.message || '保存简历失败，请稍后重试。';
+                alert(error.message || '保存简历失败');
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-wand-magic-sparkles"></i> 保存并解析简历';
+                }
+            }
+        }
+
+        function showResumeDetail(event) {
+            event?.stopPropagation();
+            const summary = currentResume?.summary || parseJsonField(currentResume?.summary_json, null);
+            if (!summary) {
+                openResumeEditor(event);
+                return;
+            }
+
+            const contentDiv = document.getElementById('main-content');
+            contentDiv.innerHTML = `
+                <div class="page-shell" style="padding: 8px 0 20px;">
+                    <div class="back-btn" onclick="loadTabContent('interview')">
+                        <i class="fas fa-arrow-left"></i> 返回AI面试
+                    </div>
+                    <div class="card">
+                        <div style="display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 18px;">
+                            <div>
+                                <h2>${escapeHTML(summary.name || '简历解析结果')}</h2>
+                                <div style="color: #5c715c; margin-top: 6px;">${escapeHTML(summary.targetPosition || '目标岗位待补充')}</div>
+                            </div>
+                            <span class="company-tag">${escapeHTML(currentResume?.parse_source === 'ai' ? 'AI解析' : '本地解析')}</span>
+                        </div>
+                        <div class="resume-summary-box" style="margin-bottom: 18px;">
+                            ${escapeHTML(summary.summaryText || '暂无摘要')}
+                        </div>
+                        <h4>教育背景</h4>
+                        ${renderSimpleList(summary.education)}
+                        <h4 style="margin-top: 16px;">项目经历</h4>
+                        ${renderSimpleList(summary.projects)}
+                        <h4 style="margin-top: 16px;">技能标签</h4>
+                        <div class="resume-chip-row">${asArray(summary.skills).map(skill => `<span>${escapeHTML(skill)}</span>`).join('') || '<span>暂无</span>'}</div>
+                        <h4 style="margin-top: 16px;">优势亮点</h4>
+                        ${renderSimpleList(summary.highlights)}
+                        <h4 style="margin-top: 16px;">潜在短板</h4>
+                        ${renderSimpleList(summary.weaknesses)}
+                        <button class="btn-outline" style="margin-top: 20px;" onclick="openResumeEditor(event)">
+                            <i class="fas fa-pen"></i> 更新简历
+                        </button>
                     </div>
                 </div>
             `;
@@ -1145,10 +1353,10 @@ function confirmEndVideoInterview() {
             ).slice(0, 5);
             
             if (relatedQuestions.length === 0) {
-                startInterview(type, getDefaultQuestions(type));
+                startInterview(type, getDefaultQuestions(type), null, getActiveResumePayload());
             } else {
                 const questions = relatedQuestions.map(k => k.interview_questions).join('\n\n').split('\n').filter(q => q.trim());
-                startInterview(type, questions.slice(0, 5));
+                startInterview(type, questions.slice(0, 5), null, getActiveResumePayload());
             }
         }
 
@@ -1159,6 +1367,7 @@ function confirmEndVideoInterview() {
             
             const questions = (item.interview_questions || '').split('\n').filter(q => q.trim());
             startInterview(item.position || '岗位面试', questions, id, {
+                ...getActiveResumePayload(),
                 position: item.position || '岗位面试',
                 company: item.company || '',
                 aiSource: 'knowledge'
@@ -1211,6 +1420,7 @@ function confirmEndVideoInterview() {
             }
 
             try {
+                const resumePayload = getActiveResumePayload();
                 const response = await fetch(`${API_BASE}/ai/interview/generate`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1218,6 +1428,8 @@ function confirmEndVideoInterview() {
                         position,
                         company,
                         jd,
+                        resumeId: resumePayload.resumeId,
+                        resumeSummary: resumePayload.resumeSummary,
                         interviewerId: selectedInterviewer.id,
                         interviewer: selectedInterviewer,
                         questionCount: 6
@@ -1238,6 +1450,8 @@ function confirmEndVideoInterview() {
                     position,
                     company,
                     jd,
+                    resumeId: resumePayload.resumeId,
+                    resumeSummary: resumePayload.resumeSummary,
                     aiProfile: data.profile,
                     aiSource: data.source
                 });
@@ -1251,6 +1465,8 @@ function confirmEndVideoInterview() {
                     position,
                     company,
                     jd,
+                    resumeId: getActiveResumePayload().resumeId,
+                    resumeSummary: getActiveResumePayload().resumeSummary,
                     aiSource: 'local'
                 });
             } finally {
@@ -1282,6 +1498,8 @@ function confirmEndVideoInterview() {
                 position: options.position || type,
                 company: options.company || '',
                 jd: options.jd || '',
+                resumeId: options.resumeId || null,
+                resumeSummary: options.resumeSummary || '',
                 questions: questions,
                 questionMeta: questions.map(() => ({ kind: 'base' })),
                 currentIndex: 0,
@@ -1447,6 +1665,7 @@ function confirmEndVideoInterview() {
                         position: currentInterview.position,
                         company: currentInterview.company,
                         interviewerId: currentInterview.interviewerId || selectedInterviewer.id,
+                        resumeSummary: currentInterview.resumeSummary,
                         question: currentInterview.questions[currentInterview.currentIndex],
                         answer,
                         previousQuestions: currentInterview.questions.slice(0, currentInterview.currentIndex + 1)
@@ -1500,6 +1719,8 @@ function confirmEndVideoInterview() {
                         company: currentInterview.company,
                         jd: currentInterview.jd,
                         interviewerId: currentInterview.interviewerId || selectedInterviewer.id,
+                        resumeId: currentInterview.resumeId,
+                        resumeSummary: currentInterview.resumeSummary,
                         questions: currentInterview.questions,
                         answers: currentInterview.answers,
                         startedAt: currentInterview.startTime,
@@ -1527,6 +1748,7 @@ function confirmEndVideoInterview() {
                     company: currentInterview.company,
                     interviewer_id: currentInterview.interviewerId,
                     jd_text: currentInterview.jd,
+                    metadata: { resumeId: currentInterview.resumeId, resumeSummary: currentInterview.resumeSummary },
                     questions: currentInterview.questions,
                     answers: currentInterview.answers,
                     score: data.report?.totalScore || 0,

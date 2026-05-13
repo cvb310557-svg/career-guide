@@ -4,6 +4,7 @@
   "description": "Career guide web application",
   "main": "src/server.js",
   "scripts": {
+    "db:start": "powershell -ExecutionPolicy Bypass -File scripts/start-mysql-dev.ps1",
     "start": "node src/server.js",
     "test:db": "node scripts/test-db.js"
   },

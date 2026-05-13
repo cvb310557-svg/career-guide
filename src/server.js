@@ -12,7 +12,8 @@ const {
     getInterviewerProfile,
     buildQuestionMessages,
     buildReportMessages,
-    buildFollowupMessages
+    buildFollowupMessages,
+    buildResumeMessages
 } = require('./prompts');
 
 const app = express();
@@ -82,6 +83,119 @@ function clampScore(value, fallback = 70) {
     const score = Number(value);
     if (!Number.isFinite(score)) return fallback;
     return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+function toSummaryText(summary) {
+    if (!summary || typeof summary !== 'object') return '';
+    const parts = [
+        summary.summaryText,
+        summary.name ? `候选人: ${summary.name}` : '',
+        summary.targetPosition ? `目标岗位: ${summary.targetPosition}` : '',
+        toArray(summary.education).length ? `教育背景: ${toArray(summary.education).join('；')}` : '',
+        toArray(summary.projects).length ? `项目经历: ${toArray(summary.projects).join('；')}` : '',
+        toArray(summary.skills).length ? `技能标签: ${toArray(summary.skills).join('、')}` : '',
+        toArray(summary.highlights).length ? `优势亮点: ${toArray(summary.highlights).join('；')}` : '',
+        toArray(summary.weaknesses).length ? `潜在短板: ${toArray(summary.weaknesses).join('；')}` : ''
+    ].filter(Boolean);
+    return parts.join('\n').slice(0, 2000);
+}
+
+function uniqueItems(items, limit = 8) {
+    return [...new Set(items.map((item) => String(item).trim()).filter(Boolean))].slice(0, limit);
+}
+
+function extractSectionLines(text, keywords, stopKeywords = []) {
+    const lines = String(text || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const result = [];
+    let collecting = false;
+    for (const line of lines) {
+        const isStart = keywords.some((keyword) => line.includes(keyword));
+        const isStop = collecting && stopKeywords.some((keyword) => line.includes(keyword));
+        if (isStart) {
+            collecting = true;
+            result.push(line.replace(/^[#\-\s：:]+/, ''));
+            continue;
+        }
+        if (isStop) collecting = false;
+        if (collecting && result.length < 5) result.push(line);
+    }
+    return uniqueItems(result, 5);
+}
+
+function fallbackResumeSummary({ resumeText, targetPosition, nickname }) {
+    const text = String(resumeText || '');
+    const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const firstLine = lines.find((line) => /^[\u4e00-\u9fa5A-Za-z\s]{2,30}$/.test(line) && !/简历|求职|岗位|电话|邮箱/.test(line));
+    const emailName = text.match(/([A-Za-z0-9._%+-]+)@[A-Za-z0-9.-]+/)?.[1];
+    const name = firstLine || nickname || emailName || '求职者';
+    const roleMatch = text.match(/(?:目标岗位|求职意向|应聘岗位|岗位)[:：\s]*([^\n\r，,；;]{2,40})/);
+    const skills = uniqueItems(
+        (text.match(/JavaScript|TypeScript|React|Vue|Node\.?js|Express|MySQL|SQL|Python|Java|Spring|Linux|Docker|Redis|Excel|Tableau|PowerBI|产品|运营|数据分析|用户研究|项目管理|机器学习|深度学习|NLP/gi) || [])
+            .map((item) => item.replace(/^nodejs$/i, 'Node.js')),
+        10
+    );
+    const education = extractSectionLines(text, ['教育', '学历', '院校', '大学', '学院'], ['项目', '实习', '工作', '技能']);
+    const projects = extractSectionLines(text, ['项目', '实践', '作品', '经历'], ['教育', '技能', '证书', '自我评价']);
+    const highlights = [];
+    if (projects.length) highlights.push('具备可展开追问的项目或实践经历');
+    if (skills.length >= 3) highlights.push(`技能覆盖较完整，包括 ${skills.slice(0, 4).join('、')}`);
+    if (/\d+|%|百分|提升|增长|降低|优化|负责|主导/.test(text)) highlights.push('简历中包含一定结果或行动描述');
+
+    const weaknesses = [];
+    if (!targetPosition && !roleMatch) weaknesses.push('目标岗位还不够明确，建议补充求职意向');
+    if (!projects.length) weaknesses.push('项目经历信息偏少，面试中可能缺少案例支撑');
+    if (!/\d+|%|百分|提升|增长|降低/.test(text)) weaknesses.push('量化成果较少，建议补充数据化结果');
+
+    const summaryText = [
+        `${name}正在准备${targetPosition || roleMatch?.[1] || '目标岗位'}面试。`,
+        education.length ? `教育背景包含${education[0]}。` : '',
+        projects.length ? `主要经历包括${projects.slice(0, 2).join('；')}。` : '',
+        skills.length ? `核心技能包括${skills.slice(0, 6).join('、')}。` : ''
+    ].filter(Boolean).join('');
+
+    return {
+        name,
+        targetPosition: targetPosition || roleMatch?.[1] || '',
+        education,
+        projects,
+        skills,
+        highlights: highlights.length ? highlights : ['已提供基础简历文本，可用于定制面试问题'],
+        weaknesses: weaknesses.length ? weaknesses : ['可继续补充更明确的岗位关键词、量化成果和项目职责边界'],
+        summaryText: summaryText.slice(0, 180) || '已保存简历文本，后续面试可结合简历内容生成问题。'
+    };
+}
+
+function normalizeResumeSummary(raw, fallbackInput) {
+    const fallback = fallbackResumeSummary(fallbackInput);
+    if (!raw || typeof raw !== 'object') return fallback;
+    return {
+        name: raw.name || fallback.name,
+        targetPosition: raw.targetPosition || raw.position || fallback.targetPosition,
+        education: toArray(raw.education).length ? toArray(raw.education) : fallback.education,
+        projects: toArray(raw.projects || raw.projectExperience).length ? toArray(raw.projects || raw.projectExperience) : fallback.projects,
+        skills: toArray(raw.skills || raw.skillTags).length ? uniqueItems(toArray(raw.skills || raw.skillTags), 12) : fallback.skills,
+        highlights: toArray(raw.highlights || raw.strengths).length ? toArray(raw.highlights || raw.strengths) : fallback.highlights,
+        weaknesses: toArray(raw.weaknesses || raw.risks).length ? toArray(raw.weaknesses || raw.risks) : fallback.weaknesses,
+        summaryText: raw.summaryText || raw.summary || fallback.summaryText
+    };
+}
+
+function serializeResumeRow(row) {
+    if (!row) return null;
+    return {
+        ...row,
+        summary: parseJsonResponseSafe(row.summary_json, null)
+    };
+}
+
+function parseJsonResponseSafe(value, fallback) {
+    if (!value) return fallback;
+    if (typeof value !== 'string') return value;
+    try {
+        return JSON.parse(value);
+    } catch {
+        return fallback;
+    }
 }
 
 async function queryKnowledge({ position = '', company = '', jd = '', knowledgeId = null }) {
@@ -530,6 +644,112 @@ app.post('/api/bookings', async (req, res) => {
     }
 });
 
+app.post('/api/resumes', async (req, res) => {
+    const {
+        userId,
+        text,
+        resumeText,
+        targetPosition,
+        fileName,
+        sourceType = fileName ? 'txt' : 'text'
+    } = req.body;
+
+    const rawText = String(text || resumeText || '').trim();
+    if (!userId) {
+        return res.status(400).json({ error: '缺少用户ID' });
+    }
+    if (!rawText) {
+        return res.status(400).json({ error: '请输入或上传简历文本' });
+    }
+    if (rawText.length > 60000) {
+        return res.status(400).json({ error: '简历文本过长，请先精简到 6 万字以内' });
+    }
+
+    const fallbackInput = {
+        resumeText: rawText,
+        targetPosition,
+        nickname: req.body.nickname
+    };
+    let summary;
+    let source = 'ai';
+
+    try {
+        const messages = buildResumeMessages({
+            resumeText: rawText.slice(0, 18000),
+            targetPosition,
+            nickname: req.body.nickname
+        });
+        const content = await callLLM({ messages, temperature: 0.2, responseFormat: 'json_object' });
+        summary = normalizeResumeSummary(parseJsonResponse(content), fallbackInput);
+    } catch (error) {
+        source = 'fallback';
+        summary = fallbackResumeSummary(fallbackInput);
+        summary.warning = error.message;
+    }
+
+    try {
+        const [result] = await db.promise().query(
+            `INSERT INTO resumes
+            (user_id, file_name, source_type, target_position, raw_text, summary_json, summary_text, parse_source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+                userId,
+                fileName || null,
+                sourceType,
+                targetPosition || summary.targetPosition || null,
+                rawText,
+                JSON.stringify(summary),
+                toSummaryText(summary),
+                source
+            ]
+        );
+
+        res.json({
+            success: true,
+            id: result.insertId,
+            source,
+            resume: {
+                id: result.insertId,
+                user_id: userId,
+                file_name: fileName || null,
+                source_type: sourceType,
+                target_position: targetPosition || summary.targetPosition || null,
+                raw_text: rawText,
+                summary_json: JSON.stringify(summary),
+                summary_text: toSummaryText(summary),
+                parse_source: source,
+                summary
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/resumes/:userId', async (req, res) => {
+    try {
+        const [rows] = await db.promise().query(
+            'SELECT * FROM resumes WHERE user_id = ? ORDER BY updated_at DESC, created_at DESC',
+            [req.params.userId]
+        );
+        res.json(rows.map(serializeResumeRow));
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/resume/:id', async (req, res) => {
+    try {
+        const [rows] = await db.promise().query(
+            'SELECT * FROM resumes WHERE id = ? LIMIT 1',
+            [req.params.id]
+        );
+        res.json(serializeResumeRow(rows[0]) || null);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 app.post('/api/ai/interview/generate', async (req, res) => {
     const {
         position,
@@ -538,6 +758,8 @@ app.post('/api/ai/interview/generate', async (req, res) => {
         interviewerId,
         interviewer,
         knowledgeId,
+        resumeId,
+        resumeSummary,
         questionCount = 6
     } = req.body;
 
@@ -548,10 +770,23 @@ app.post('/api/ai/interview/generate', async (req, res) => {
     const profile = getInterviewerProfile(interviewerId || interviewer?.id);
     const knowledgeRows = await queryKnowledge({ position, company, jd, knowledgeId });
     const knowledgeContext = formatKnowledgeContext(knowledgeRows);
+    let resolvedResumeSummary = resumeSummary || '';
+    if (!resolvedResumeSummary && resumeId) {
+        try {
+            const [resumeRows] = await db.promise().query(
+                'SELECT summary_text, summary_json FROM resumes WHERE id = ? LIMIT 1',
+                [resumeId]
+            );
+            const resume = resumeRows[0];
+            resolvedResumeSummary = resume?.summary_text || toSummaryText(parseJsonResponseSafe(resume?.summary_json, null));
+        } catch (error) {
+            console.warn('Resume lookup skipped:', error.message);
+        }
+    }
     const fallback = fallbackQuestions({
         position,
         company,
-        jd,
+        jd: [jd, resolvedResumeSummary].filter(Boolean).join('\n'),
         interviewerId: profile.id,
         questionCount: Number(questionCount) || 6
     });
@@ -563,6 +798,7 @@ app.post('/api/ai/interview/generate', async (req, res) => {
             jd,
             interviewer: profile,
             knowledgeContext,
+            resumeSummary: resolvedResumeSummary,
             questionCount: Number(questionCount) || 6
         });
         const content = await callLLM({ messages, temperature: 0.45, responseFormat: 'json_object' });
@@ -599,6 +835,7 @@ app.post('/api/ai/interview/followup', async (req, res) => {
         interviewerId,
         question,
         answer,
+        resumeSummary,
         previousQuestions = []
     } = req.body;
 
@@ -615,6 +852,7 @@ app.post('/api/ai/interview/followup', async (req, res) => {
             interviewer: profile,
             question,
             answer,
+            resumeSummary,
             previousQuestions
         });
         const content = await callLLM({ messages, temperature: 0.35, responseFormat: 'json_object' });
@@ -641,6 +879,8 @@ app.post('/api/ai/interview/report', async (req, res) => {
         company,
         jd,
         interviewerId,
+        resumeId,
+        resumeSummary,
         questions,
         answers,
         startedAt,
@@ -669,6 +909,7 @@ app.post('/api/ai/interview/report', async (req, res) => {
             interviewer: profile,
             questions: questionList,
             answers: answerList,
+            resumeSummary,
             knowledgeContext: formatKnowledgeContext(knowledgeRows)
         });
         const content = await callLLM({ messages, temperature: 0.25, responseFormat: 'json_object' });
@@ -693,7 +934,7 @@ app.post('/api/ai/interview/report', async (req, res) => {
                 answers: answerList,
                 score: report.totalScore,
                 aiReport: report,
-                metadata: { source, startedAt, finishedAt: new Date().toISOString() }
+                metadata: { source, startedAt, finishedAt: new Date().toISOString(), resumeId: resumeId || null, resumeSummary: resumeSummary || null }
             });
         } catch (error) {
             console.warn('Saving AI report failed:', error.message);

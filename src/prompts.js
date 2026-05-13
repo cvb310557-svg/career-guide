@@ -41,6 +41,7 @@ function buildQuestionMessages({
     jd,
     interviewer,
     knowledgeContext,
+    resumeSummary,
     questionCount = 6
 }) {
     return [
@@ -65,6 +66,9 @@ function buildQuestionMessages({
                 '',
                 '岗位JD:',
                 jd || '用户未提供JD，请根据岗位通用要求生成。',
+                '',
+                '候选人简历摘要:',
+                resumeSummary || '用户暂未提供简历，请按岗位通用要求生成。',
                 '',
                 '可参考知识库资料:',
                 knowledgeContext || '暂无知识库命中资料。',
@@ -92,6 +96,7 @@ function buildFollowupMessages({
     interviewer,
     question,
     answer,
+    resumeSummary,
     previousQuestions = []
 }) {
     return [
@@ -111,6 +116,9 @@ function buildFollowupMessages({
                 `公司/场景: ${company || '通用场景'}`,
                 `面试官: ${interviewer.name}（${interviewer.style}）`,
                 `风格要求: ${interviewer.behavior}`,
+                '',
+                '候选人简历摘要:',
+                resumeSummary || '暂无简历摘要。',
                 '',
                 '已问过的问题:',
                 previousQuestions.join('\n') || '无',
@@ -132,6 +140,7 @@ function buildReportMessages({
     interviewer,
     questions,
     answers,
+    resumeSummary,
     knowledgeContext
 }) {
     const qaText = questions.map((question, index) => {
@@ -159,6 +168,9 @@ function buildReportMessages({
                 '',
                 '岗位JD:',
                 jd || '用户未提供JD。',
+                '',
+                '候选人简历摘要:',
+                resumeSummary || '暂无简历摘要。',
                 '',
                 '知识库参考:',
                 knowledgeContext || '暂无资料。',
@@ -199,10 +211,47 @@ function buildReportMessages({
     ];
 }
 
+function buildResumeMessages({ resumeText, targetPosition, nickname }) {
+    return [
+        {
+            role: 'system',
+            content: [
+                '你是“职引官”的简历解析助手，负责把中文或英文简历解析成面试可用摘要。',
+                '必须只输出 JSON，不要输出 Markdown。',
+                '不要编造简历中没有的学校、公司、项目或技能。',
+                '如果某项缺失，请输出空字符串或空数组，并给出温和、可执行的短板提示。'
+            ].join('\n')
+        },
+        {
+            role: 'user',
+            content: [
+                `用户昵称: ${nickname || '未提供'}`,
+                `目标岗位: ${targetPosition || '未填写'}`,
+                '',
+                '简历全文:',
+                resumeText,
+                '',
+                '请输出如下 JSON 结构:',
+                JSON.stringify({
+                    name: '姓名或昵称',
+                    targetPosition: '目标岗位',
+                    education: ['教育经历1'],
+                    projects: ['项目经历1'],
+                    skills: ['技能标签1', '技能标签2'],
+                    highlights: ['优势亮点1', '优势亮点2'],
+                    weaknesses: ['潜在短板1', '潜在短板2'],
+                    summaryText: '120字以内的中文简历摘要'
+                }, null, 2)
+            ].join('\n')
+        }
+    ];
+}
+
 module.exports = {
     INTERVIEWERS,
     getInterviewerProfile,
     buildQuestionMessages,
     buildFollowupMessages,
-    buildReportMessages
+    buildReportMessages,
+    buildResumeMessages
 };
