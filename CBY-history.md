@@ -1,5 +1,96 @@
 # CBY History
 
+## 2026-05-13
+
+### 正式面试最小闭环
+
+- 从 `feature/job-template-library` 切出 `feature/interview-mvp-loop`，承接“前端正式启动一次面试”的闭环验收。
+- 模板快速开始改为优先调用 `POST /api/ai/interview/generate` 生成题目，并携带 `templateId/templateSummary`、简历摘要和面试官风格；生成失败时使用本地模板题库继续。
+- 前端入口文案区分“模板快速开始”“自定义岗位开始”和“视频面试演示入口”，未登录、会话创建失败和数据库短暂不可用时显示可继续操作的提示。
+- 最近面试和全部历史会把 `in_progress` session 显示为“继续答题”，完成记录才打开复盘报告。
+- 前端 `API_BASE` 改为跟随当前页面来源，方便 `3000` 被占用时用备用端口验收。
+- 后端 session 服务启动时会补齐旧表中的 `position/company/interviewer_id/jd_text/resume/template/report/source` 等字段，以及 turn 的 `kind/ai_source` 字段，降低旧库迁移失败风险。
+
+### 正式面试闭环验证记录
+
+- 已通过 `node --check src/server.js`。
+- 已通过 `node --check src/prompts.js`。
+- 已通过 `node --check public/js/app.js`。
+- 已通过 `node --check public/js/app-core.js`。
+
+### 岗位模板库
+
+- 新增 `job_templates` 数据表脚本和服务启动初始化，内置产品经理、Java开发、金融数据分析、新媒体运营模板。
+- 新增岗位模板接口：`GET /api/job-templates`、`GET /api/job-templates/:id`、`GET /api/job-templates/search/:keyword`。
+- 面试题生成现在结合“岗位模板 + JD + 简历 + 知识库”，AI 失败时继续使用本地 fallback。
+- 前端 AI 面试工作台的热门岗位优先来自模板库，自定义面试页支持选择岗位模板并自动填充岗位、行业和训练上下文。
+- 面试 session 新增 `template_id` 和 `template_summary`，用于后续成长分析按模板回溯。
+
+### 岗位模板库验证记录
+
+- 已通过 `node --check src/server.js`。
+- 已通过 `node --check src/prompts.js`。
+- 已通过 `node --check public/js/app.js`。
+- 已通过 `npm run test:db`。
+- 已用备用端口 `3100` 启动当前分支服务并验证 `GET /api/job-templates` 返回模板数据；本机 `3000` 端口已有旧 Node 进程占用。
+
+### 代码文件语义拆分
+
+- 将 `src/server.js` 中的通用工具拆到 `src/utils.js`。
+- 将简历 fallback、摘要标准化和序列化拆到 `src/resumeService.js`。
+- 将岗位模板初始化、匹配、上下文格式化拆到 `src/jobTemplateService.js`。
+- 将面试 session、知识库检索、题目/报告 fallback 和报告标准化拆到 `src/interviewService.js`。
+- 将前端配置和通用展示/解析工具拆到 `public/js/app-core.js`，并在 `public/index.html` 中先于 `app.js` 加载。
+
+### 面试流程 session 化
+
+- 新增 `interview_sessions` 和 `interview_turns` 数据表脚本，并在服务启动时执行可重复的表初始化。
+- 新增面试会话接口：创建会话、读取会话、按用户读取会话、保存逐轮问答、生成并入库追问、结束面试并保存复盘报告。
+- 将前端 AI 面试流程改为优先使用 `sessionId` 推进，每次切题前保存当前问题、回答、题目类型和 AI 来源。
+- 支持页面刷新或中断后通过本地未完成会话提示或 URL `sessionId` 恢复问题、回答和当前进度。
+- 最近面试历史现在优先合并展示 session 化记录，同时兼容旧 `interview_records` 记录。
+
+### 开发计划重写
+
+- 重写 `开发计划.md`，将项目定位、已完成能力、当前问题、下一阶段优先级、技术原则和验收标准分区整理。
+- 将下一阶段优先级调整为：面试 session 化、岗位模板库建模、真实成长曲线、简历解析增强、视频面试流程打通。
+- 在开发计划末尾补充“立即下一步 Prompt”，用于后续直接启动面试 session 化开发。
+
+### README 与版本管理
+
+- 精简 `开发计划.md`，改为当前阶段、已完成、主要缺口、下一阶段优先级、技术原则和下一步 prompt。
+- 重写 `README.md`，补充功能状态、技术栈、目录结构、快速开始、环境变量、数据库、本地 MySQL、接口清单、开发规范和 Git 工作流。
+- 从 `ai-interview-model` 切出 `feature/resume-readme-roadmap` 分支，用于承接简历解析闭环、README、路线图和本地 MySQL 脚本相关改动。
+
+### 简历上传与解析：后端模型
+
+- 新增 `resumes` 数据表脚本，保存用户、文件名/来源、目标岗位、原始简历文本、结构化摘要、摘要文本和解析来源。
+- 新增简历解析 prompt，并让面试题生成、追问、复盘接口预留/接收简历摘要上下文。
+- 新增 `POST /api/resumes`、`GET /api/resumes/:userId`、`GET /api/resume/:id` 基础接口。
+- 简历解析优先调用大模型，失败时使用本地规则兜底抽取姓名/目标岗位/教育/项目/技能/亮点/短板，保证页面可用。
+
+### 简历上传与解析：前端闭环
+
+- 将 AI 面试工作台左侧“用户简历”占位卡改为真实简历模块，支持查看最新简历摘要、技能标签、优势亮点和潜在短板。
+- 新增简历编辑页内交互，支持粘贴纯文本或上传 txt 文件，提交后调用后端保存并解析。
+- 自定义 AI 面试生成、面试追问和复盘报告请求会携带当前 `resumeId` 与 `resumeSummary`，后续题目生成可结合简历上下文。
+- 补充简历模块样式，保持现有 AI 面试工作台卡片风格。
+
+### 验证记录
+
+- 已通过 `node --check src/server.js`。
+- 已通过 `node --check src/prompts.js`。
+- 已通过 `node --check public/js/app.js`。
+- 已尝试执行 `npm run test:db`，当前环境数据库连接失败，需在可连接 MySQL 的环境执行 `db/zhiyinguan.sql` 以创建 `resumes` 表。
+
+### 本地 MySQL 安装与初始化
+
+- 通过 `winget install --id Oracle.MySQL --source winget --silent` 安装 MySQL 8.4.9。
+- 初始化本地开发数据目录 `C:\Users\cvb\.career-guide-mysql-data`，root 使用空密码以匹配当前 `.env`。
+- 导入 `db/zhiyinguan.sql`，已创建 `zhiguanguan` 数据库和 `resumes` 等项目表。
+- 新增 `scripts/start-mysql-dev.ps1` 与 `npm run db:start`，用于下次启动本地开发 MySQL。
+- 已重新执行 `npm run test:db`，数据库连接成功。
+
 ## 2026-05-10
 
 ### 项目结构整理

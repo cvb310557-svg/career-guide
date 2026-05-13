@@ -204,6 +204,68 @@
             font-weight: 800;
         }
 
+        .resume-mini-action {
+            margin-left: auto;
+            width: 34px;
+            height: 34px;
+            border: 1px solid #d0e8d0;
+            border-radius: 50%;
+            background: #f8fcf7;
+            color: #2c6e2c;
+            cursor: pointer;
+        }
+
+        .resume-summary-box {
+            padding: 14px;
+            border-radius: 14px;
+            background: #f4f8f1;
+            color: #334d33;
+            line-height: 1.55;
+            margin-bottom: 14px;
+        }
+
+        .resume-summary-text {
+            font-size: 14px;
+            margin-bottom: 12px;
+        }
+
+        .resume-chip-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .resume-chip-row span {
+            padding: 5px 10px;
+            border-radius: 999px;
+            background: #e8f3e5;
+            color: #2c6e2c;
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .resume-mini-section {
+            margin: 12px 0;
+            color: #4f6b4f;
+            font-size: 14px;
+        }
+
+        .resume-mini-section strong {
+            display: block;
+            color: #1e3a1e;
+            margin-bottom: 6px;
+        }
+
+        .resume-editor-card {
+            max-width: 900px;
+            margin-inline: auto;
+        }
+
+        .resume-editor-card textarea.input-field {
+            border-radius: 18px;
+            line-height: 1.55;
+        }
+
         .interview-center-column {
             display: grid;
             gap: 18px;

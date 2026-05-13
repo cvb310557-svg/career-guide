@@ -1,28 +1,69 @@
-﻿// ==================== 全局配置 ====================
-        const API_BASE = 'http://localhost:3000/api';
+// ==================== Core config and helpers ====================
+        const {
+            API_BASE,
+            ACTIVE_SESSION_KEY,
+            getPreviewUser,
+            asArray,
+            parseJsonField,
+            escapeHTML,
+            renderSimpleList,
+            getRecordAIReport,
+            getHistoryRecordId,
+            getSessionNumericId
+        } = window.ZYGCore;
         
-        // ==================== 状态管理 ====================
+        // ==================== State management ====================
         let currentUser = null;
         let currentTab = 'interview';
         let forumPosts = [];
         let knowledgeData = [];
         let mentors = [];
         let interviewHistory = [];
+        let resumes = [];
+        let jobTemplates = [];
+        let currentResume = null;
+        let activeVideoStream = null;
         const queryParams = new URLSearchParams(window.location.search);
         const isDevPreview = queryParams.get('dev') === '1';
         const previewTab = queryParams.get('tab') || 'interview';
-
-        function getPreviewUser() {
+        const sessionIdFromUrl = queryParams.get('sessionId');
+        function normalizeTemplate(template) {
+            if (!template) return null;
             return {
-                id: 1,
-                username: 'dev',
-                nickname: '开发预览',
-                points: 999
+                ...template,
+                ability_model: asArray(template.ability_model || template.abilityModel),
+                common_questions: asArray(template.common_questions || template.commonQuestions),
+                keywords: asArray(template.keywords),
+                training_advice: asArray(template.training_advice || template.trainingAdvice)
             };
         }
 
-        function asArray(value) {
-            return Array.isArray(value) ? value : [];
+        function getSelectedTemplate() {
+            const id = Number(document.getElementById('custom-template')?.value || 0);
+            return normalizeTemplate(jobTemplates.find(item => Number(item.id) === id));
+        }
+
+        function getTemplateByKeyword(keyword) {
+            const text = String(keyword || '');
+            return normalizeTemplate(jobTemplates.find(item =>
+                text.includes(item.name) ||
+                item.name?.includes(text) ||
+                item.industry?.includes(text) ||
+                asArray(item.keywords).some(tag => text.includes(tag) || tag.includes(text))
+            ));
+        }
+
+        function buildTemplateSummary(template) {
+            const item = normalizeTemplate(template);
+            if (!item) return null;
+            return {
+                id: item.id,
+                name: item.name,
+                industry: item.industry,
+                abilityModel: item.ability_model,
+                keywords: item.keywords,
+                trainingAdvice: item.training_advice
+            };
         }
 
         // 面试官形象列表 - 使用本地照片（照片放在images文件夹中）
@@ -108,7 +149,11 @@ function hideSplashScreen() {
         await loadInitialData();
         setTimeout(() => {
             renderMainApp();
-            loadTabContent(previewTab);
+            if (sessionIdFromUrl) {
+                resumeInterviewSession(sessionIdFromUrl);
+            } else {
+                loadTabContent(previewTab);
+            }
             hideSplashScreen();
         }, 500);
         return;
@@ -121,7 +166,11 @@ function hideSplashScreen() {
         // 延迟加载主界面，让动画播放完
         setTimeout(() => {
             renderMainApp();
-            loadTabContent('interview');
+            if (sessionIdFromUrl) {
+                resumeInterviewSession(sessionIdFromUrl);
+            } else {
+                loadTabContent('interview');
+            }
             hideSplashScreen();
         }, 1500);
     } else {
@@ -159,9 +208,14 @@ function hideSplashScreen() {
                 // 加载导师
                 mentors = await fetchArray('/mentors');
 
+                // 加载岗位模板
+                jobTemplates = await fetchArray('/job-templates');
+
                 // 加载面试历史
                 if (currentUser) {
                     interviewHistory = await fetchArray(`/interview/history/${currentUser.id}`);
+                    resumes = await fetchArray(`/resumes/${currentUser.id}`);
+                    currentResume = resumes[0] || null;
                 }
             } catch (error) {
                 console.error('加载数据失败:', error);
@@ -179,6 +233,13 @@ function hideSplashScreen() {
                     { id: 1, name: '赵老师', company: '腾讯', position: '产品策划', experience: '3年', rating: 4.9 },
                     { id: 2, name: '钱工', company: '阿里', position: 'Java架构', experience: '8年', rating: 5.0 }
                 ];
+                jobTemplates = [
+                    { id: 1, name: '产品经理', industry: '互联网', ability_model: ['用户洞察', '需求分析', '数据判断'], common_questions: ['请分析一款你常用产品的核心用户和增长机会。', '如果核心功能上线后留存下降，你会如何定位？'], keywords: ['产品经理', '用户研究', '数据分析'], training_advice: ['准备完整产品分析案例'] },
+                    { id: 2, name: 'Java开发', industry: '互联网技术', ability_model: ['Java基础', 'JVM', '并发编程'], common_questions: ['请介绍你最熟悉的后端项目。', 'JVM 内存区域如何划分？'], keywords: ['Java', 'Spring', 'MySQL'], training_advice: ['复盘一个后端项目架构'] },
+                    { id: 3, name: '金融数据分析', industry: '金融', ability_model: ['SQL', 'Python', '业务解释'], common_questions: ['请介绍一个数据分析项目。', '业务方不认可数据结论时你会如何沟通？'], keywords: ['金融', '数据分析', 'SQL'], training_advice: ['准备数据到业务建议案例'] }
+                ];
+                resumes = [];
+                currentResume = null;
             }
         }
 
@@ -781,11 +842,17 @@ case 'profile':
         let currentInterview = {
             type: '',
             position: '',
+            company: '',
+            jd: '',
             questions: [],
+            questionMeta: [],
             currentIndex: 0,
             answers: [],
             startTime: null,
-            knowledgeId: null
+            knowledgeId: null,
+            interviewerId: null,
+            followupsUsed: 0,
+            maxFollowups: 1
         };
 
         // ==================== 新增: 面试官选择行（使用本地照片）====================
@@ -814,8 +881,53 @@ case 'profile':
         }
 
         function renderResumePreview() {
+            const summary = currentResume?.summary || parseJsonField(currentResume?.summary_json, null);
+            const displayName = summary?.name || currentUser?.nickname || currentUser?.username || '求职者';
+            const skills = asArray(summary?.skills).slice(0, 6);
+            const highlights = asArray(summary?.highlights).slice(0, 2);
+            const weaknesses = asArray(summary?.weaknesses).slice(0, 2);
+
+            if (currentResume && summary) {
+                return `
+                    <div class="resume-panel card">
+                        <div class="panel-heading">
+                            <i class="fas fa-file-lines"></i>
+                            <span>用户简历</span>
+                            <button class="resume-mini-action" onclick="openResumeEditor(event)" title="更新简历">
+                                <i class="fas fa-pen"></i>
+                            </button>
+                        </div>
+                        <div class="resume-preview">
+                            <div class="resume-avatar">${displayName.charAt(0)}</div>
+                            <div>
+                                <div style="font-weight: 800; font-size: 20px;">${escapeHTML(displayName)}</div>
+                                <div style="color: #5c715c; margin-top: 6px;">${escapeHTML(summary.targetPosition || currentResume.target_position || '目标岗位待补充')}</div>
+                            </div>
+                        </div>
+                        <div class="resume-summary-box">
+                            <div class="resume-summary-text">${escapeHTML(summary.summaryText || currentResume.summary_text || '已保存简历摘要。')}</div>
+                            <div class="resume-chip-row">
+                                ${skills.map(skill => `<span>${escapeHTML(skill)}</span>`).join('') || '<span>技能待补充</span>'}
+                            </div>
+                        </div>
+                        <div class="resume-mini-section">
+                            <strong>优势亮点</strong>
+                            ${renderSimpleList(highlights)}
+                        </div>
+                        <div class="resume-mini-section">
+                            <strong>潜在短板</strong>
+                            ${renderSimpleList(weaknesses)}
+                        </div>
+                        <div class="resume-action" onclick="showResumeDetail(event)">
+                            <i class="fas fa-eye"></i>
+                            查看解析结果
+                        </div>
+                    </div>
+                `;
+            }
+
             return `
-                <div class="resume-panel card" onclick="alert('简历上传与缩略显示功能将在后续开发中接入')">
+                <div class="resume-panel card" onclick="openResumeEditor(event)">
                     <div class="panel-heading">
                         <i class="fas fa-file-lines"></i>
                         <span>用户简历</span>
@@ -835,7 +947,164 @@ case 'profile':
                     </div>
                     <div class="resume-action">
                         <i class="fas fa-upload"></i>
-                        点击设置自己的简历
+                        点击上传或粘贴简历
+                    </div>
+                </div>
+            `;
+        }
+
+        function getActiveResumePayload() {
+            const summary = currentResume?.summary || parseJsonField(currentResume?.summary_json, null);
+            return {
+                resumeId: currentResume?.id || null,
+                resumeSummary: summary
+                    ? [
+                        summary.summaryText,
+                        summary.name ? `姓名/昵称: ${summary.name}` : '',
+                        summary.targetPosition ? `目标岗位: ${summary.targetPosition}` : '',
+                        asArray(summary.education).length ? `教育背景: ${asArray(summary.education).join('；')}` : '',
+                        asArray(summary.projects).length ? `项目经历: ${asArray(summary.projects).join('；')}` : '',
+                        asArray(summary.skills).length ? `技能标签: ${asArray(summary.skills).join('、')}` : '',
+                        asArray(summary.highlights).length ? `优势亮点: ${asArray(summary.highlights).join('；')}` : '',
+                        asArray(summary.weaknesses).length ? `潜在短板: ${asArray(summary.weaknesses).join('；')}` : ''
+                    ].filter(Boolean).join('\n')
+                    : ''
+            };
+        }
+
+        function openResumeEditor(event) {
+            event?.stopPropagation();
+            const contentDiv = document.getElementById('main-content');
+            const summary = currentResume?.summary || parseJsonField(currentResume?.summary_json, null);
+            contentDiv.innerHTML = `
+                <div class="page-shell" style="padding: 8px 0 20px;">
+                    <div class="back-btn" onclick="loadTabContent('interview')">
+                        <i class="fas fa-arrow-left"></i> 返回AI面试
+                    </div>
+
+                    <div class="card resume-editor-card">
+                        <div class="panel-heading">
+                            <i class="fas fa-file-arrow-up"></i>
+                            <span>简历上传与解析</span>
+                        </div>
+                        <input type="text" id="resume-target-position" class="input-field" placeholder="目标岗位（可选）" value="${escapeHTML(summary?.targetPosition || currentResume?.target_position || '')}">
+                        <input type="file" id="resume-file-input" class="input-field" accept=".txt,text/plain">
+                        <textarea id="resume-text-input" class="input-field" rows="12" placeholder="粘贴纯文本简历，或上传 txt 文件后自动填入">${escapeHTML(currentResume?.raw_text || '')}</textarea>
+                        <div id="resume-upload-status" style="font-size: 13px; color: #4f6b4f; margin: 4px 0 14px;">当前先支持纯文本和 txt 文件；pdf/docx 可后续扩展文本提取。</div>
+                        <button class="btn-primary" id="resume-submit-btn" onclick="submitResume()">
+                            <i class="fas fa-wand-magic-sparkles"></i> 保存并解析简历
+                        </button>
+                    </div>
+                </div>
+            `;
+
+            document.getElementById('resume-file-input')?.addEventListener('change', async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                if (!file.name.toLowerCase().endsWith('.txt') && file.type !== 'text/plain') {
+                    alert('当前版本先支持 txt 文件，请将简历内容复制为纯文本后上传。');
+                    e.target.value = '';
+                    return;
+                }
+                const text = await file.text();
+                const textarea = document.getElementById('resume-text-input');
+                if (textarea) textarea.value = text;
+            });
+        }
+
+        async function submitResume() {
+            const text = document.getElementById('resume-text-input')?.value?.trim();
+            const targetPosition = document.getElementById('resume-target-position')?.value?.trim();
+            const file = document.getElementById('resume-file-input')?.files?.[0];
+            const btn = document.getElementById('resume-submit-btn');
+            const status = document.getElementById('resume-upload-status');
+
+            if (!currentUser?.id) {
+                alert('请先登录后再上传简历');
+                return;
+            }
+            if (!text) {
+                alert('请粘贴简历文本或上传 txt 文件');
+                return;
+            }
+
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 正在解析简历...';
+            }
+            if (status) status.textContent = '正在保存简历并生成摘要，AI不可用时会自动使用本地解析。';
+
+            try {
+                const response = await fetch(`${API_BASE}/resumes`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        userId: currentUser.id,
+                        nickname: currentUser.nickname || currentUser.username,
+                        text,
+                        targetPosition,
+                        fileName: file?.name || null,
+                        sourceType: file ? 'txt' : 'text'
+                    })
+                });
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.error || '简历解析失败');
+                }
+
+                resumes = await fetchArray(`/resumes/${currentUser.id}`);
+                currentResume = resumes[0] || data.resume;
+                loadTabContent('interview');
+            } catch (error) {
+                console.error('保存简历失败:', error);
+                if (status) status.textContent = error.message || '保存简历失败，请稍后重试。';
+                alert(error.message || '保存简历失败');
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-wand-magic-sparkles"></i> 保存并解析简历';
+                }
+            }
+        }
+
+        function showResumeDetail(event) {
+            event?.stopPropagation();
+            const summary = currentResume?.summary || parseJsonField(currentResume?.summary_json, null);
+            if (!summary) {
+                openResumeEditor(event);
+                return;
+            }
+
+            const contentDiv = document.getElementById('main-content');
+            contentDiv.innerHTML = `
+                <div class="page-shell" style="padding: 8px 0 20px;">
+                    <div class="back-btn" onclick="loadTabContent('interview')">
+                        <i class="fas fa-arrow-left"></i> 返回AI面试
+                    </div>
+                    <div class="card">
+                        <div style="display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 18px;">
+                            <div>
+                                <h2>${escapeHTML(summary.name || '简历解析结果')}</h2>
+                                <div style="color: #5c715c; margin-top: 6px;">${escapeHTML(summary.targetPosition || '目标岗位待补充')}</div>
+                            </div>
+                            <span class="company-tag">${escapeHTML(currentResume?.parse_source === 'ai' ? 'AI解析' : '本地解析')}</span>
+                        </div>
+                        <div class="resume-summary-box" style="margin-bottom: 18px;">
+                            ${escapeHTML(summary.summaryText || '暂无摘要')}
+                        </div>
+                        <h4>教育背景</h4>
+                        ${renderSimpleList(summary.education)}
+                        <h4 style="margin-top: 16px;">项目经历</h4>
+                        ${renderSimpleList(summary.projects)}
+                        <h4 style="margin-top: 16px;">技能标签</h4>
+                        <div class="resume-chip-row">${asArray(summary.skills).map(skill => `<span>${escapeHTML(skill)}</span>`).join('') || '<span>暂无</span>'}</div>
+                        <h4 style="margin-top: 16px;">优势亮点</h4>
+                        ${renderSimpleList(summary.highlights)}
+                        <h4 style="margin-top: 16px;">潜在短板</h4>
+                        ${renderSimpleList(summary.weaknesses)}
+                        <button class="btn-outline" style="margin-top: 20px;" onclick="openResumeEditor(event)">
+                            <i class="fas fa-pen"></i> 更新简历
+                        </button>
                     </div>
                 </div>
             `;
@@ -890,7 +1159,7 @@ function startVideoInterviewSession() {
     const contentDiv = document.getElementById('main-content');
     contentDiv.innerHTML = `
         <div class="page-shell" style="padding: 8px 0 20px;">
-            <div class="back-btn" onclick="startVideoInterview()">
+            <div class="back-btn" onclick="stopLocalVideoPreview(); startVideoInterview()">
                 <i class="fas fa-arrow-left"></i> 返回视频面试准备
             </div>
             
@@ -906,7 +1175,8 @@ function startVideoInterviewSession() {
                     
                     <!-- 小窗 - 自己 -->
                     <div style="position: absolute; bottom: 16px; right: 16px; width: 100px; height: 150px; border-radius: 12px; overflow: hidden; border: 3px solid white; box-shadow: 0 2px 8px rgba(0,0,0,0.2);">
-                        <div style="background: #2c6e2c; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: white; font-size: 40px;">
+                        <video id="local-video-preview" autoplay muted playsinline style="display: none; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1);"></video>
+                        <div id="local-video-fallback" style="background: #2c6e2c; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: white; font-size: 40px;">
                             <i class="fas fa-user"></i>
                         </div>
                     </div>
@@ -955,32 +1225,70 @@ function startVideoInterviewSession() {
             </div>
         </div>
     `;
+    initLocalVideoPreview();
 }
+
+async function initLocalVideoPreview() {
+    const video = document.getElementById('local-video-preview');
+    const fallback = document.getElementById('local-video-fallback');
+    if (!video || !navigator.mediaDevices?.getUserMedia) return;
+
+    try {
+        activeVideoStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        video.srcObject = activeVideoStream;
+        video.style.display = 'block';
+        if (fallback) fallback.style.display = 'none';
+    } catch (error) {
+        console.warn('摄像头预览不可用:', error);
+    }
+}
+
+function stopLocalVideoPreview() {
+    if (!activeVideoStream) return;
+    activeVideoStream.getTracks().forEach(track => track.stop());
+    activeVideoStream = null;
+}
+
 // ==================== 确认结束视频面试 ====================
 function confirmEndVideoInterview() {
     if (confirm('确定要结束视频面试吗？')) {
+        stopLocalVideoPreview();
         alert('面试已结束，正在生成面试报告...');
         loadTabContent('interview');
     }
 }
         // ==================== AI面试板块（修改后，包含面试官形象和视频面试入口）====================
         function renderInterview(container) {
-            const practiceItems = asArray(knowledgeData).slice(0, 4);
+            const practiceItems = asArray(jobTemplates).length
+                ? asArray(jobTemplates).slice(0, 4).map(item => ({ ...item, source: 'template' }))
+                : asArray(knowledgeData).slice(0, 4).map(item => ({ ...item, source: 'knowledge' }));
+            const activeSessionId = localStorage.getItem(ACTIVE_SESSION_KEY);
 
             container.innerHTML = `
                 <div class="page-shell interview-workspace" style="padding: 8px 0 20px;">
+                    ${activeSessionId ? `
+                        <section class="card" style="display: flex; justify-content: space-between; gap: 12px; align-items: center; background: #f8fcf7;">
+                            <div>
+                                <div style="font-weight: 700; color: #2c6e2c;">有一场未完成的面试</div>
+                                <div style="font-size: 13px; color: #6d826d; margin-top: 4px;">继续后会恢复已保存进度；每道题切换时会自动保存。</div>
+                            </div>
+                            <button class="btn-primary" style="width: auto;" onclick="resumeInterviewSession('${escapeHTML(activeSessionId)}')">
+                                <i class="fas fa-play"></i> 继续
+                            </button>
+                        </section>
+                    ` : ''}
                     <section class="interview-topline">
                         <div class="section-title">
-                            <i class="fas fa-fire"></i> 热门岗位
+                            <i class="fas fa-fire"></i> 模板快速开始
                             <span style="margin-left: auto; font-size: 14px; color: #2c6e2c; cursor: pointer;" onclick="switchTab('knowledge')">查看全部</span>
                         </div>
                         <div class="hot-role-strip">
                             ${practiceItems.map(item => `
-                            <div class="knowledge-item hot-role-card" onclick="startInterviewFromKnowledge(${item.id})">
-                                <span class="company-tag">${item.company || '未知'}</span>
-                                <div class="position-name">${item.position || '岗位'}</div>
-                                <div class="question-preview">基于真实面经训练</div>
-                                <span class="type-badge">${item.experience_type || '面经'}</span>
+                            <div class="knowledge-item hot-role-card" onclick="${item.source === 'template' ? `startInterviewFromTemplate(${item.id})` : `startInterviewFromKnowledge(${item.id})`}">
+                                <span class="company-tag">${escapeHTML(item.industry || item.company || '通用')}</span>
+                                <div class="position-name">${escapeHTML(item.name || item.position || '岗位')}</div>
+                                <div class="question-preview">${item.source === 'template' ? '点击后生成题目并创建正式会话' : '基于真实面经训练'}</div>
+                                <span class="type-badge">${item.source === 'template' ? '模板' : (item.experience_type || '面经')}</span>
                             </div>
                             `).join('') || '<div style="grid-column: 1 / -1; text-align: center; color: #8aa08a; padding: 24px;">暂无练习数据</div>'}
                         </div>
@@ -995,8 +1303,8 @@ function confirmEndVideoInterview() {
                                     <i class="fas fa-sliders"></i>
                                     <span>自定义岗位面试</span>
                                 </div>
-                                <div class="interview-card-title">岗位定制 AI 面试官</div>
-                                <p>基于真实面经与岗位 JD 生成问题，适合正式面试前的集中演练。</p>
+                                <div class="interview-card-title">自定义岗位开始</div>
+                                <p>填写岗位和 JD 后开始正式练习；AI 不可用时会自动切换本地题库。</p>
                                 <div class="role-chip-row">
                                     <span class="company-tag" onclick="startInterviewByType('互联网')">互联网</span>
                                     <span class="company-tag" onclick="startInterviewByType('公务员')">公务员</span>
@@ -1015,8 +1323,8 @@ function confirmEndVideoInterview() {
                                     <i class="fas fa-video"></i>
                                 </div>
                                 <div>
-                                    <div class="interview-card-title">视频面试 · 真人模拟</div>
-                                    <p>当前面试官：${selectedInterviewer.name}（${selectedInterviewer.style}）</p>
+                                    <div class="interview-card-title">视频面试 · 演示入口</div>
+                                    <p>当前面试官：${selectedInterviewer.name}（${selectedInterviewer.style}），正式闭环请从模板或自定义开始。</p>
                                 </div>
                                 <i class="fas fa-chevron-right"></i>
                             </div>
@@ -1049,35 +1357,110 @@ function confirmEndVideoInterview() {
                 `;
             }
 
-            return interviewHistory.slice(0, 3).map(record => `
-                <div class="card" style="cursor: pointer;" onclick="showInterviewReport(${record.id})">
+            return interviewHistory.slice(0, 3).map(record => {
+                const questions = parseJsonField(record.questions, []);
+                const report = getRecordAIReport(record);
+                const score = report?.totalScore ?? record.score ?? 0;
+                const recordId = getHistoryRecordId(record);
+                const isInProgress = record.status === 'in_progress' && record.sessionId;
+                const action = isInProgress
+                    ? `resumeInterviewSession('${escapeHTML(record.sessionId)}')`
+                    : `showInterviewReport('${escapeHTML(recordId)}')`;
+                return `
+                <div class="card" style="cursor: pointer;" onclick="${action}">
                     <div style="display: flex; justify-content: space-between;">
                         <div>
-                            <span class="company-tag">${record.type || '模拟面试'}</span>
-                            <span style="margin-left: 8px; font-weight: 600;">${record.score || 0}分</span>
+                            <span class="company-tag">${escapeHTML(record.type || '模拟面试')}</span>
+                            <span style="margin-left: 8px; font-weight: 600; color: ${isInProgress ? '#c47a00' : '#2c6e2c'};">
+                                ${isInProgress ? '未完成，点击继续' : `${score}分`}
+                            </span>
                         </div>
-                        <span style="color: #8aa08a;">${new Date(record.created_at).toLocaleDateString()}</span>
+                        <span style="color: #8aa08a;">${new Date(record.finished_at || record.updated_at || record.created_at).toLocaleDateString()}</span>
                     </div>
                     <div style="margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap;">
-                        ${JSON.parse(record.questions || '[]').slice(0, 2).map(q => 
+                        ${asArray(questions).slice(0, 2).map(q => 
                             `<span style="background: #f0f7ee; padding: 4px 8px; border-radius: 20px; font-size: 12px;">${q.substring(0, 15)}...</span>`
                         ).join('')}
                     </div>
                 </div>
-            `).join('');
+            `}).join('');
         }
 
         // ==================== 按类型开始面试 ====================
         function startInterviewByType(type) {
+            const template = getTemplateByKeyword(type);
+            if (template) {
+                startInterviewFromTemplate(template.id);
+                return;
+            }
             const relatedQuestions = knowledgeData.filter(k => 
                 k.position?.includes(type) || k.company?.includes(type)
             ).slice(0, 5);
             
             if (relatedQuestions.length === 0) {
-                startInterview(type, getDefaultQuestions(type));
+                startInterview(type, getDefaultQuestions(type), null, getActiveResumePayload());
             } else {
                 const questions = relatedQuestions.map(k => k.interview_questions).join('\n\n').split('\n').filter(q => q.trim());
-                startInterview(type, questions.slice(0, 5));
+                startInterview(type, questions.slice(0, 5), null, getActiveResumePayload());
+            }
+        }
+
+        async function startInterviewFromTemplate(id) {
+            const item = normalizeTemplate(jobTemplates.find(template => Number(template.id) === Number(id)));
+            if (!item) return;
+
+            const resumePayload = getActiveResumePayload();
+            const fallbackQuestions = item.common_questions.length ? item.common_questions : getDefaultQuestions(item.name);
+            showInterviewSessionLoading(`正在为${item.name || '岗位'}生成正式面试题`);
+
+            try {
+                const jd = [
+                    `岗位模板：${item.name}`,
+                    `行业：${item.industry || '通用'}`,
+                    `关键词：${item.keywords.join('、')}`,
+                    `能力模型：${item.ability_model.join('、')}`
+                ].join('\n');
+                const response = await fetch(`${API_BASE}/ai/interview/generate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        position: item.name || '岗位面试',
+                        company: item.industry || '',
+                        jd,
+                        templateId: item.id,
+                        resumeId: resumePayload.resumeId,
+                        resumeSummary: resumePayload.resumeSummary,
+                        interviewerId: selectedInterviewer.id,
+                        interviewer: selectedInterviewer,
+                        questionCount: 6
+                    })
+                });
+                const data = await response.json();
+                if (!response.ok || !data.success) throw new Error(data.error || '题目生成失败');
+                const generatedQuestions = asArray(data.questions).filter(Boolean);
+                if (!generatedQuestions.length) throw new Error('没有生成有效题目');
+
+                startInterview(item.name || '岗位面试', generatedQuestions.slice(0, 6), null, {
+                    ...resumePayload,
+                    position: item.name || '岗位面试',
+                    company: item.industry || '',
+                    jd,
+                    templateId: data.template?.id || item.id,
+                    templateSummary: data.template || buildTemplateSummary(item),
+                    aiProfile: data.profile,
+                    aiSource: data.source || 'template'
+                });
+            } catch (error) {
+                console.error('模板题目生成失败，使用本地模板题库:', error);
+                startInterview(item.name || '岗位面试', fallbackQuestions.slice(0, 6), null, {
+                    ...resumePayload,
+                    position: item.name || '岗位面试',
+                    company: item.industry || '',
+                    templateId: item.id,
+                    templateSummary: buildTemplateSummary(item),
+                    aiSource: 'local-template',
+                    sessionWarning: 'AI 题目生成暂时不可用，已使用本地模板题库继续。'
+                });
             }
         }
 
@@ -1087,7 +1470,12 @@ function confirmEndVideoInterview() {
             if (!item) return;
             
             const questions = (item.interview_questions || '').split('\n').filter(q => q.trim());
-            startInterview(item.position || '岗位面试', questions, id);
+            startInterview(item.position || '岗位面试', questions, id, {
+                ...getActiveResumePayload(),
+                position: item.position || '岗位面试',
+                company: item.company || '',
+                aiSource: 'knowledge'
+            });
         }
 
         // ==================== 自定义面试 ====================
@@ -1101,11 +1489,18 @@ function confirmEndVideoInterview() {
 
                     <div class="card">
                         <h3 style="margin-bottom: 20px;">自定义面试</h3>
+                        <select id="custom-template" class="input-field" onchange="applyTemplateToCustomForm()">
+                            <option value="">选择岗位模板（可选）</option>
+                            ${asArray(jobTemplates).map(template => `
+                                <option value="${template.id}">${escapeHTML(template.name)} · ${escapeHTML(template.industry || '通用')}</option>
+                            `).join('')}
+                        </select>
                         <input type="text" id="custom-position" class="input-field" placeholder="输入岗位名称（如：Java开发）">
                         <input type="text" id="custom-company" class="input-field" placeholder="输入公司名称（可选）">
                         <textarea id="custom-jd" class="input-field" placeholder="粘贴职位描述（JD），AI会根据JD生成问题" rows="5"></textarea>
+                        <div id="ai-generate-status" style="font-size: 13px; color: #4f6b4f; margin: 8px 0 14px;"></div>
                         
-                        <button class="btn-primary" onclick="generateInterviewFromJD()">
+                        <button class="btn-primary" id="generate-interview-btn" onclick="generateInterviewFromJD()">
                             <i class="fas fa-magic"></i> 生成面试题并开始
                         </button>
                     </div>
@@ -1113,34 +1508,114 @@ function confirmEndVideoInterview() {
             `;
         }
 
+        function applyTemplateToCustomForm() {
+            const template = getSelectedTemplate();
+            if (!template) return;
+            const positionInput = document.getElementById('custom-position');
+            const companyInput = document.getElementById('custom-company');
+            const jdInput = document.getElementById('custom-jd');
+            if (positionInput && !positionInput.value) positionInput.value = template.name || '';
+            if (companyInput && !companyInput.value) companyInput.value = template.industry || '';
+            if (jdInput && !jdInput.value) {
+                jdInput.value = [
+                    `岗位关键词：${template.keywords.join('、')}`,
+                    `能力模型：${template.ability_model.join('、')}`,
+                    `训练建议：${template.training_advice.join('；')}`
+                ].join('\n');
+            }
+        }
+
         // ==================== 根据JD生成面试题 ====================
         async function generateInterviewFromJD() {
             const position = document.getElementById('custom-position')?.value;
             const company = document.getElementById('custom-company')?.value;
             const jd = document.getElementById('custom-jd')?.value;
+            const selectedTemplate = getSelectedTemplate();
+            const btn = document.getElementById('generate-interview-btn');
+            const status = document.getElementById('ai-generate-status');
 
             if (!position) {
                 alert('请输入岗位名称');
                 return;
             }
 
-            let questions = [];
-            
-            if (jd) {
-                const keywords = jd.match(/[a-zA-Z\u4e00-\u9fa5]{2,}/g) || [];
-                const uniqueKeywords = [...new Set(keywords)].slice(0, 5);
-                questions = uniqueKeywords.map(k => `请谈谈你对${k}的理解和经验？`);
-            } else {
-                questions = getDefaultQuestions(position);
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> AI正在生成面试题...';
+            }
+            if (status) {
+                status.textContent = `正在让 ${selectedInterviewer.name} 读取岗位信息并生成问题`;
             }
 
-            questions.push('你还有什么问题想问我们吗？');
-            
-            startInterview(`${company ? company + ' ' : ''}${position}`, questions);
+            try {
+                const resumePayload = getActiveResumePayload();
+                const response = await fetch(`${API_BASE}/ai/interview/generate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        position,
+                        company,
+                        jd,
+                        templateId: selectedTemplate?.id || null,
+                        resumeId: resumePayload.resumeId,
+                        resumeSummary: resumePayload.resumeSummary,
+                        interviewerId: selectedInterviewer.id,
+                        interviewer: selectedInterviewer,
+                        questionCount: 6
+                    })
+                });
+
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.error || 'AI生成失败');
+                }
+
+                const questions = asArray(data.questions).filter(Boolean);
+                if (questions.length === 0) {
+                    throw new Error('AI没有返回有效问题');
+                }
+
+                startInterview(`${company ? company + ' ' : ''}${position}`, questions, null, {
+                    position,
+                    company,
+                    jd,
+                    resumeId: resumePayload.resumeId,
+                    resumeSummary: resumePayload.resumeSummary,
+                    templateId: data.template?.id || selectedTemplate?.id || null,
+                    templateSummary: data.template || buildTemplateSummary(selectedTemplate),
+                    aiProfile: data.profile,
+                    aiSource: data.source
+                });
+            } catch (error) {
+                console.error('AI生成面试题失败:', error);
+                if (status) {
+                    status.textContent = 'AI暂时不可用，已切换为本地题库生成。';
+                }
+                const questions = getDefaultQuestions(position);
+                startInterview(`${company ? company + ' ' : ''}${position}`, questions, null, {
+                    position,
+                    company,
+                    jd,
+                    resumeId: getActiveResumePayload().resumeId,
+                    resumeSummary: getActiveResumePayload().resumeSummary,
+                    templateId: selectedTemplate?.id || null,
+                    templateSummary: buildTemplateSummary(selectedTemplate),
+                    aiSource: 'local'
+                });
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-magic"></i> 生成面试题并开始';
+                }
+            }
         }
 
         // ==================== 默认问题 ====================
         function getDefaultQuestions(type) {
+            const template = getTemplateByKeyword(type);
+            if (template?.common_questions?.length) {
+                return template.common_questions.slice(0, 6);
+            }
             const defaultQuestions = {
                 '互联网': ['请做一下自我介绍', '为什么选择互联网行业？', '你最大的优缺点是什么？', '如何看待加班？', '未来3-5年的职业规划'],
                 '公务员': ['请做自我介绍', '为什么选择考公务员？', '如何看待"放管服"改革？', '如果群众上访你怎么办？', '你的政治立场是什么？'],
@@ -1154,18 +1629,168 @@ function confirmEndVideoInterview() {
         }
 
         // ==================== 开始面试 ====================
-        function startInterview(type, questions, knowledgeId = null) {
+        async function startInterview(type, questions, knowledgeId = null, options = {}) {
+            showInterviewSessionLoading('正在创建面试会话');
+            const questionList = asArray(questions).filter(Boolean);
+            if (!questionList.length) {
+                alert('暂时没有可用题目，请换一个岗位或稍后再试');
+                loadTabContent('interview');
+                return;
+            }
             currentInterview = {
                 type: type,
-                position: type,
-                questions: questions,
+                position: options.position || type,
+                company: options.company || '',
+                jd: options.jd || '',
+                templateId: options.templateId || null,
+                templateSummary: options.templateSummary || null,
+                resumeId: options.resumeId || null,
+                resumeSummary: options.resumeSummary || '',
+                questions: questionList,
+                questionMeta: questionList.map(() => ({ kind: 'base' })),
                 currentIndex: 0,
-                answers: new Array(questions.length).fill(''),
+                answers: new Array(questionList.length).fill(''),
                 startTime: new Date(),
-                knowledgeId: knowledgeId
+                knowledgeId: knowledgeId,
+                interviewerId: selectedInterviewer.id,
+                aiProfile: options.aiProfile || null,
+                aiSource: options.aiSource || null,
+                aiReport: null,
+                recordId: null,
+                sessionId: null,
+                sessionWarning: options.sessionWarning || '',
+                followupsUsed: 0,
+                maxFollowups: options.maxFollowups ?? 1
             };
 
+            if (currentUser?.id) {
+                try {
+                    const response = await fetch(`${API_BASE}/interview/sessions`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            userId: currentUser.id,
+                            type,
+                            position: currentInterview.position,
+                            company: currentInterview.company,
+                            jd: currentInterview.jd,
+                            templateId: currentInterview.templateId,
+                            templateSummary: currentInterview.templateSummary,
+                            interviewerId: currentInterview.interviewerId,
+                            resumeId: currentInterview.resumeId,
+                            resumeSummary: currentInterview.resumeSummary,
+                            questions: questionList,
+                            aiSource: currentInterview.aiSource
+                        })
+                    });
+                    const data = await response.json();
+                    if (response.ok && data.success && data.session) {
+                        currentInterview.sessionId = data.session.sessionId;
+                        localStorage.setItem(ACTIVE_SESSION_KEY, String(data.session.sessionId));
+                    } else {
+                        currentInterview.sessionWarning = data.error || '会话创建失败，本次将以本地临时面试继续。';
+                    }
+                } catch (error) {
+                    console.error('创建面试会话失败，继续使用本地流程:', error);
+                    currentInterview.sessionWarning = '数据库暂时不可用，本次将以本地临时面试继续，刷新页面可能无法恢复。';
+                }
+            } else {
+                currentInterview.sessionWarning = '当前未登录，本次可以完整练习，但不会写入历史记录。';
+            }
+
             showInterviewQuestion();
+        }
+
+        function showInterviewSessionLoading(text = '正在恢复面试会话') {
+            const contentDiv = document.getElementById('main-content');
+            if (!contentDiv) return;
+            contentDiv.innerHTML = `
+                <div class="page-shell" style="padding: 8px 0 20px;">
+                    <div class="card" style="text-align: center; padding: 40px 24px;">
+                        <i class="fas fa-spinner fa-spin" style="font-size: 36px; color: #2c6e2c; margin-bottom: 16px;"></i>
+                        <h3>${text}</h3>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function resumeInterviewSession(sessionId) {
+            showInterviewSessionLoading();
+            try {
+                const response = await fetch(`${API_BASE}/interview/sessions/${getSessionNumericId(sessionId)}`);
+                const session = await response.json();
+                if (!response.ok || !session?.sessionId) throw new Error(session.error || '会话不存在');
+                if (session.status === 'finished') {
+                    if (currentUser?.id) interviewHistory = await fetchArray(`/interview/history/${currentUser.id}`);
+                    showInterviewReport(session.id);
+                    return;
+                }
+
+                const questions = asArray(parseJsonField(session.questions, []));
+                const answers = asArray(parseJsonField(session.answers, []));
+                const turns = asArray(session.turns);
+                const firstOpenIndex = questions.findIndex((_, index) => !answers[index]);
+                const currentIndex = firstOpenIndex === -1 ? Math.max(0, questions.length - 1) : firstOpenIndex;
+                selectedInterviewer = interviewers.find(iv => iv.id === session.interviewer_id) || selectedInterviewer;
+
+                currentInterview = {
+                    type: session.type || session.position || 'AI面试',
+                    position: session.position || session.type || 'AI面试',
+                    company: session.company || '',
+                    jd: session.jd_text || '',
+                    templateId: session.template_id || session.metadata?.templateId || null,
+                    templateSummary: session.template_summary || session.metadata?.templateSummary || null,
+                    resumeId: session.resume_id || session.metadata?.resumeId || null,
+                    resumeSummary: session.resume_summary || session.metadata?.resumeSummary || '',
+                    questions,
+                    questionMeta: questions.map((_, index) => {
+                        const turn = turns.find(item => item.questionIndex === index);
+                        return { kind: turn?.kind || 'base', source: turn?.aiSource || null };
+                    }),
+                    currentIndex,
+                    answers: questions.map((_, index) => answers[index] || ''),
+                    startTime: session.started_at ? new Date(session.started_at) : new Date(),
+                    knowledgeId: null,
+                    interviewerId: session.interviewer_id || selectedInterviewer.id,
+                    aiProfile: null,
+                    aiSource: session.ai_source || null,
+                    aiReport: null,
+                    recordId: null,
+                    sessionId: session.sessionId,
+                    sessionWarning: '',
+                    followupsUsed: turns.filter(item => item.kind === 'followup').length,
+                    maxFollowups: 1
+                };
+                localStorage.setItem(ACTIVE_SESSION_KEY, String(session.sessionId));
+                showInterviewQuestion();
+            } catch (error) {
+                console.error('恢复面试失败:', error);
+                localStorage.removeItem(ACTIVE_SESSION_KEY);
+                alert('恢复面试失败，请重新开始一次模拟面试');
+                loadTabContent('interview');
+            }
+        }
+
+        async function saveCurrentTurn() {
+            if (!currentInterview?.sessionId) return;
+            const index = currentInterview.currentIndex;
+            const question = currentInterview.questions[index];
+            if (!question) return;
+            try {
+                await fetch(`${API_BASE}/interview/sessions/${currentInterview.sessionId}/turns`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        questionIndex: index,
+                        question,
+                        answer: currentInterview.answers[index] || '',
+                        kind: currentInterview.questionMeta?.[index]?.kind || 'base',
+                        aiSource: currentInterview.questionMeta?.[index]?.source || currentInterview.aiSource || null
+                    })
+                });
+            } catch (error) {
+                console.error('保存当前答题轮次失败:', error);
+            }
         }
 
         // ==================== 显示面试问题（使用当前选中的面试官照片）====================
@@ -1181,6 +1806,11 @@ function confirmEndVideoInterview() {
                     </div>
 
                     <div class="card" style="text-align: center;">
+                        ${currentInterview.sessionWarning ? `
+                            <div style="background: #fff9e6; color: #8a5a00; border-radius: 12px; padding: 10px 12px; margin-bottom: 16px; text-align: left; font-size: 13px;">
+                                <i class="fas fa-circle-info"></i> ${escapeHTML(currentInterview.sessionWarning)}
+                            </div>
+                        ` : ''}
                         <!-- 进度条 -->
                         <div style="margin-bottom: 20px;">
                             <div style="display: flex; justify-content: space-between; font-size: 14px;">
@@ -1200,8 +1830,20 @@ function confirmEndVideoInterview() {
 
                         <!-- 问题 -->
                         <div class="card" style="background: #f8fcf7; margin-bottom: 20px; text-align: left;">
-                            <div style="font-weight: 600; margin-bottom: 10px;">问题 ${currentInterview.currentIndex + 1}:</div>
+                            <div style="font-weight: 600; margin-bottom: 10px;">
+                                问题 ${currentInterview.currentIndex + 1}:
+                                ${currentInterview.questionMeta?.[currentInterview.currentIndex]?.kind === 'followup' ? '<span class="company-tag" style="margin-left: 8px;">AI追问</span>' : ''}
+                            </div>
                             <div style="font-size: 18px; line-height: 1.5;">${q}</div>
+                        </div>
+
+                        <div style="display: flex; gap: 10px; margin-bottom: 12px;">
+                            <button class="btn-outline" style="flex: 1; padding: 10px;" onclick="speakCurrentQuestion()">
+                                <i class="fas fa-volume-up"></i> 朗读问题
+                            </button>
+                            <button class="btn-outline" style="flex: 1; padding: 10px;" onclick="startSpeechInput()">
+                                <i class="fas fa-microphone"></i> 语音输入
+                            </button>
                         </div>
 
                         <!-- 回答输入 -->
@@ -1212,7 +1854,7 @@ function confirmEndVideoInterview() {
                             <button class="btn-outline" style="flex: 1;" onclick="previousQuestion()" ${currentInterview.currentIndex === 0 ? 'disabled' : ''}>
                                 <i class="fas fa-arrow-left"></i> 上一题
                             </button>
-                            <button class="btn-primary" style="flex: 2;" onclick="nextQuestion()">
+                            <button class="btn-primary" id="next-question-btn" style="flex: 2;" onclick="nextQuestion()">
                                 ${currentInterview.currentIndex === currentInterview.questions.length - 1 ? '完成面试' : '下一题'} 
                                 <i class="fas fa-arrow-right"></i>
                             </button>
@@ -1232,28 +1874,119 @@ function confirmEndVideoInterview() {
             });
         }
 
+        function speakCurrentQuestion() {
+            const question = currentInterview.questions[currentInterview.currentIndex];
+            if (!question) return;
+            if (!('speechSynthesis' in window)) {
+                alert('当前浏览器不支持语音朗读');
+                return;
+            }
+
+            window.speechSynthesis.cancel();
+            const utterance = new SpeechSynthesisUtterance(question);
+            utterance.lang = 'zh-CN';
+            utterance.rate = 0.95;
+            window.speechSynthesis.speak(utterance);
+        }
+
+        function startSpeechInput() {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SpeechRecognition) {
+                alert('当前浏览器不支持语音识别，可使用 Chrome 或 Edge 体验');
+                return;
+            }
+
+            const textarea = document.getElementById('interview-answer');
+            if (!textarea) return;
+
+            const recognition = new SpeechRecognition();
+            recognition.lang = 'zh-CN';
+            recognition.interimResults = true;
+            recognition.continuous = false;
+
+            const original = textarea.value ? `${textarea.value}\n` : '';
+            recognition.onresult = (event) => {
+                const text = Array.from(event.results)
+                    .map(result => result[0]?.transcript || '')
+                    .join('');
+                textarea.value = `${original}${text}`;
+                currentInterview.answers[currentInterview.currentIndex] = textarea.value;
+            };
+            recognition.onerror = () => {
+                alert('语音识别失败，请检查麦克风权限');
+            };
+            recognition.start();
+        }
+
         // ==================== 上一题 ====================
-        function previousQuestion() {
+        async function previousQuestion() {
             if (currentInterview.currentIndex > 0) {
                 const answer = document.getElementById('interview-answer')?.value;
                 if (answer !== undefined) {
                     currentInterview.answers[currentInterview.currentIndex] = answer;
                 }
+                await saveCurrentTurn();
                 currentInterview.currentIndex--;
                 showInterviewQuestion();
             }
         }
 
         // ==================== 下一题 ====================
-        function nextQuestion() {
+        async function maybeInsertFollowup(answer) {
+            const meta = currentInterview.questionMeta?.[currentInterview.currentIndex];
+            if (meta?.kind === 'followup') return false;
+            if ((currentInterview.followupsUsed || 0) >= (currentInterview.maxFollowups || 0)) return false;
+            if (!answer || answer.trim().length < 40) return false;
+
+            try {
+                const endpoint = currentInterview.sessionId
+                    ? `/interview/sessions/${currentInterview.sessionId}/followup`
+                    : '/ai/interview/followup';
+                const response = await fetch(`${API_BASE}${endpoint}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        position: currentInterview.position,
+                        company: currentInterview.company,
+                        interviewerId: currentInterview.interviewerId || selectedInterviewer.id,
+                        resumeSummary: currentInterview.resumeSummary,
+                        questionIndex: currentInterview.currentIndex,
+                        question: currentInterview.questions[currentInterview.currentIndex],
+                        answer,
+                        kind: meta?.kind || 'base',
+                        previousQuestions: currentInterview.questions.slice(0, currentInterview.currentIndex + 1)
+                    })
+                });
+                const data = await response.json();
+                if (!response.ok || !data.success || !data.followup) return false;
+
+                currentInterview.questions.splice(currentInterview.currentIndex + 1, 0, data.followup);
+                currentInterview.answers.splice(currentInterview.currentIndex + 1, 0, '');
+                currentInterview.questionMeta.splice(currentInterview.currentIndex + 1, 0, { kind: 'followup', source: data.source });
+                currentInterview.followupsUsed = (currentInterview.followupsUsed || 0) + 1;
+                return true;
+            } catch (error) {
+                console.error('AI追问生成失败:', error);
+                return false;
+            }
+        }
+
+        async function nextQuestion() {
             const answer = document.getElementById('interview-answer')?.value;
             if (answer !== undefined) {
                 currentInterview.answers[currentInterview.currentIndex] = answer;
             }
+            await saveCurrentTurn();
 
             if (currentInterview.currentIndex === currentInterview.questions.length - 1) {
                 finishInterview();
             } else {
+                const btn = document.getElementById('next-question-btn');
+                if (btn) {
+                    btn.disabled = true;
+                    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> AI判断追问...';
+                }
+                await maybeInsertFollowup(answer);
                 currentInterview.currentIndex++;
                 showInterviewQuestion();
             }
@@ -1261,44 +1994,101 @@ function confirmEndVideoInterview() {
 
         // ==================== 完成面试 ====================
         async function finishInterview() {
-            const score = calculateInterviewScore();
-            
-            const interviewRecord = {
-                userId: currentUser.id,
-                type: currentInterview.type,
-                questions: JSON.stringify(currentInterview.questions),
-                answers: JSON.stringify(currentInterview.answers),
-                score: score
-            };
-
+            await saveCurrentTurn();
+            showReportGenerating();
             try {
-                await fetch(`${API_BASE}/interview/save`, {
+                const endpoint = currentInterview.sessionId
+                    ? `/interview/sessions/${currentInterview.sessionId}/finish`
+                    : '/ai/interview/report';
+                const response = await fetch(`${API_BASE}${endpoint}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(interviewRecord)
+                    body: JSON.stringify({
+                        userId: currentUser?.id,
+                        type: currentInterview.type,
+                        position: currentInterview.position,
+                        company: currentInterview.company,
+                        jd: currentInterview.jd,
+                        templateId: currentInterview.templateId,
+                        templateSummary: currentInterview.templateSummary,
+                        interviewerId: currentInterview.interviewerId || selectedInterviewer.id,
+                        resumeId: currentInterview.resumeId,
+                        resumeSummary: currentInterview.resumeSummary,
+                        questions: currentInterview.questions,
+                        answers: currentInterview.answers,
+                        startedAt: currentInterview.startTime,
+                        save: !currentInterview.sessionId
+                    })
                 });
 
-                const historyRes = await fetch(`${API_BASE}/interview/history/${currentUser.id}`);
-                interviewHistory = await historyRes.json();
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.error || 'AI报告生成失败');
+                }
+
+                currentInterview.aiReport = data.report;
+                currentInterview.recordId = data.session?.id || data.recordId;
+                if (currentInterview.sessionId) {
+                    localStorage.removeItem(ACTIVE_SESSION_KEY);
+                }
+
+                if (currentUser?.id) {
+                    const historyRes = await fetch(`${API_BASE}/interview/history/${currentUser.id}`);
+                    interviewHistory = await historyRes.json();
+                }
 
                 showInterviewReport(null, {
+                    id: data.session?.id || data.recordId,
+                    sessionId: data.session?.sessionId || currentInterview.sessionId,
+                    source_type: currentInterview.sessionId ? 'session' : 'record',
                     type: currentInterview.type,
+                    position: currentInterview.position,
+                    company: currentInterview.company,
+                    interviewer_id: currentInterview.interviewerId,
+                    jd_text: currentInterview.jd,
+                    template_id: currentInterview.templateId,
+                    template_summary: currentInterview.templateSummary,
+                    metadata: {
+                        resumeId: currentInterview.resumeId,
+                        resumeSummary: currentInterview.resumeSummary,
+                        templateId: currentInterview.templateId,
+                        templateSummary: currentInterview.templateSummary
+                    },
                     questions: currentInterview.questions,
                     answers: currentInterview.answers,
-                    score: score,
-                    created_at: new Date()
+                    score: data.report?.totalScore || 0,
+                    ai_report: data.report,
+                    created_at: new Date(),
+                    finished_at: new Date()
                 });
 
             } catch (error) {
-                console.error('保存面试记录失败:', error);
+                console.error('AI报告生成失败:', error);
+                const score = calculateInterviewScore();
                 showInterviewReport(null, {
                     type: currentInterview.type,
+                    position: currentInterview.position,
+                    company: currentInterview.company,
                     questions: currentInterview.questions,
                     answers: currentInterview.answers,
                     score: score,
+                    ai_report: null,
                     created_at: new Date()
                 });
             }
+        }
+
+        function showReportGenerating() {
+            const contentDiv = document.getElementById('main-content');
+            contentDiv.innerHTML = `
+                <div class="page-shell" style="padding: 8px 0 20px;">
+                    <div class="card" style="text-align: center; padding: 40px 24px;">
+                        <i class="fas fa-spinner fa-spin" style="font-size: 42px; color: #2c6e2c; margin-bottom: 18px;"></i>
+                        <h3 style="margin-bottom: 8px;">正在生成面试复盘报告</h3>
+                        <p style="color: #4f6b4f;">${selectedInterviewer.name} 正在逐题分析你的回答、岗位匹配度和训练建议</p>
+                    </div>
+                </div>
+            `;
         }
 
         // ==================== 计算得分 ====================
@@ -1484,23 +2274,67 @@ function renderAbilityAnalysis(score) {
     }
 }
         // ==================== 确认结束面试 ====================
-        function confirmEndInterview() {
-            if (confirm('确定要结束面试吗？当前进度将不会保存')) {
+        async function confirmEndInterview() {
+            if (confirm('确定要结束面试吗？已回答内容会保存在当前会话中，可稍后恢复。')) {
+                await saveCurrentTurn();
                 loadTabContent('interview');
             }
         }
 
         // ==================== 显示面试报告 ====================
+        function getDimensionScores(report, fallbackScore) {
+            const dimensions = report?.dimensions || {};
+            return [
+                dimensions.jobFit ?? fallbackScore,
+                dimensions.professional ?? fallbackScore,
+                dimensions.logic ?? fallbackScore,
+                dimensions.star ?? fallbackScore,
+                dimensions.adaptability ?? fallbackScore,
+                dimensions.communication ?? fallbackScore
+            ].map(score => Math.max(0, Math.min(100, Math.round(Number(score) || fallbackScore || 0))));
+        }
+
+        function buildFallbackQuestionReviews(questions, answers) {
+            return asArray(questions).map((q, i) => ({
+                question: q,
+                answer: answers[i] || '',
+                score: calculateSingleAnswerScore(q, answers[i] || ''),
+                strengths: ['能够完成基础回应'],
+                problems: [getOptimizeSuggestion(q, answers[i] || '').replace(/<br>/g, ' ')],
+                optimizedAnswer: '建议用“背景-任务-行动-结果-岗位关联”的顺序重新组织回答，并补充具体数据或项目细节。',
+                followupSuggestion: '可以继续追问具体行动、量化结果和复盘反思。'
+            }));
+        }
+
+        function calculateSingleAnswerScore(question, answer) {
+            if (!answer || !answer.trim()) return 0;
+            let score = 45;
+            if (answer.length > 80) score += 12;
+            if (answer.length > 160) score += 10;
+            if (/首先|其次|然后|最后|第一|第二|第三|STAR|因为|所以/.test(answer)) score += 12;
+            if (/项目|案例|经历|负责|结果|提升|降低|\d+|%|百分/.test(answer)) score += 16;
+            if (question && answer.includes(question.slice(0, 2))) score += 5;
+            return Math.max(0, Math.min(100, Math.round(score)));
+        }
+
         function showInterviewReport(recordId, tempRecord = null) {
             let record = tempRecord;
             if (recordId) {
-                record = interviewHistory.find(r => r.id === recordId);
+                record = interviewHistory.find(r => getHistoryRecordId(r) === String(recordId));
             }
 
             if (!record) return;
 
-            const questions = typeof record.questions === 'string' ? JSON.parse(record.questions) : record.questions;
-            const answers = typeof record.answers === 'string' ? JSON.parse(record.answers) : record.answers;
+            const questions = asArray(parseJsonField(record.questions, []));
+            const answers = asArray(parseJsonField(record.answers, []));
+            const aiReport = getRecordAIReport(record);
+            const score = aiReport?.totalScore ?? record.score ?? 0;
+            const questionReviews = asArray(aiReport?.questionReviews).length
+                ? aiReport.questionReviews
+                : buildFallbackQuestionReviews(questions, answers);
+            const dimensionScores = aiReport
+                ? getDimensionScores(aiReport, score)
+                : generateAbilityScores(score || 70);
 
             const contentDiv = document.getElementById('main-content');
             contentDiv.innerHTML = `
@@ -1512,10 +2346,10 @@ function renderAbilityAnalysis(score) {
                     <div class="card">
                         <div style="display: flex; justify-content: space-between; align-items: center;">
                             <h2>面试复盘报告</h2>
-                            <span class="points-badge">得分: ${record.score || 0}</span>
+                            <span class="points-badge">得分: ${score}</span>
                         </div>
                         <div style="color: #8aa08a; margin: 8px 0 16px;">
-                            ${record.type} · ${new Date(record.created_at).toLocaleString()}
+                            ${record.type} · ${new Date(record.finished_at || record.updated_at || record.created_at).toLocaleString()}
                         </div>
 
                         <!-- 雷达图容器 -->
@@ -1526,23 +2360,50 @@ function renderAbilityAnalysis(score) {
                         <!-- 能力分析 -->
                         <div style="margin: 20px 0;">
                             <h4 style="margin-bottom: 12px;">📊 能力分析</h4>
-                            ${renderAbilityAnalysis(record.score)}
+                            <p style="color: #2c6e2c; line-height: 1.7;">${escapeHTML(aiReport?.summary || renderAbilityAnalysis(score).replace(/<[^>]+>/g, ''))}</p>
                         </div>
+
+                        ${aiReport ? `
+                            <div class="card" style="background: #f8fcf7; padding: 16px; margin-bottom: 16px;">
+                                <div style="font-weight: 700; margin-bottom: 10px; color: #2c6e2c;">核心优势</div>
+                                ${renderSimpleList(aiReport.strengths)}
+                                <div style="font-weight: 700; margin: 14px 0 10px; color: #c47a00;">待提升点</div>
+                                ${renderSimpleList(aiReport.weaknesses)}
+                            </div>
+                        ` : ''}
 
                         <!-- 逐题分析 -->
                         <h4 style="margin: 20px 0 12px;">📝 逐题分析</h4>
-                        ${questions.map((q, i) => `
+                        ${questionReviews.map((review, i) => `
                             <div class="card" style="margin-bottom: 12px; padding: 16px;">
-                                <div style="font-weight: 600; margin-bottom: 8px;">问题 ${i+1}: ${q}</div>
+                                <div style="display: flex; justify-content: space-between; gap: 12px; align-items: flex-start;">
+                                    <div style="font-weight: 600; margin-bottom: 8px;">问题 ${i+1}: ${escapeHTML(review.question || questions[i] || '')}</div>
+                                    <span class="company-tag">${Math.round(review.score ?? score)}分</span>
+                                </div>
                                 <div style="background: #f0f7ee; padding: 12px; border-radius: 12px; margin: 8px 0;">
-                                    <span style="color: #2c6e2c;">你的回答:</span> ${answers[i] || '未回答'}
+                                    <span style="color: #2c6e2c;">你的回答:</span> ${escapeHTML(review.answer || answers[i] || '未回答')}
                                 </div>
                                 <div style="font-size: 14px;">
-                                    <span style="color: #f5b342;">✨ 优化建议:</span> 
-                                    ${getOptimizeSuggestion(q, answers[i])}
+                                    <div style="color: #2c6e2c; font-weight: 600; margin-bottom: 6px;">亮点</div>
+                                    ${renderSimpleList(review.strengths)}
+                                    <div style="color: #c47a00; font-weight: 600; margin: 10px 0 6px;">问题</div>
+                                    ${renderSimpleList(review.problems)}
+                                    <div style="color: #f5b342; font-weight: 600; margin: 10px 0 6px;">优化思路</div>
+                                    <div style="line-height: 1.6;">${escapeHTML(review.optimizedAnswer || getOptimizeSuggestion(review.question || questions[i], review.answer || answers[i]))}</div>
+                                    ${review.followupSuggestion ? `
+                                        <div style="color: #2c6e2c; font-weight: 600; margin: 10px 0 6px;">可追问方向</div>
+                                        <div style="line-height: 1.6;">${escapeHTML(review.followupSuggestion)}</div>
+                                    ` : ''}
                                 </div>
                             </div>
                         `).join('')}
+
+                        ${aiReport ? `
+                            <h4 style="margin: 20px 0 12px;">📌 下一步训练计划</h4>
+                            <div class="card" style="background: #fff9e6; padding: 16px;">
+                                ${renderSimpleList(aiReport.trainingPlan)}
+                            </div>
+                        ` : ''}
 
                         <!-- 推荐练习 -->
                         <h4 style="margin: 20px 0 12px;">🎯 推荐练习</h4>
@@ -1565,10 +2426,10 @@ function renderAbilityAnalysis(score) {
                     new Chart(ctx, {
                         type: 'radar',
                         data: {
-                            labels: ['表达能力', '逻辑思维', '专业深度', '应变能力', '岗位匹配', '自信心'],
+                            labels: ['岗位匹配', '专业能力', '逻辑表达', 'STAR完整度', '应变能力', '沟通状态'],
                             datasets: [{
                                 label: '能力评分',
-                                data: generateAbilityScores(record.score || 70),
+                                data: dimensionScores,
                                 backgroundColor: 'rgba(44, 110, 44, 0.2)',
                                 borderColor: '#2c6e2c',
                                 pointBackgroundColor: '#2c6e2c'
@@ -1641,21 +2502,29 @@ function renderAbilityAnalysis(score) {
                     ${interviewHistory.length === 0 ? `
                         <div class="card" style="text-align: center; padding: 40px;">
                             <i class="fas fa-inbox" style="font-size: 48px; color: #8aa08a;"></i>
-                            <p style="margin-top: 16px;">暂无面试记录</p>
+                            <p style="margin-top: 16px;">暂无面试记录。可以从模板快速开始或自定义岗位开始第一场正式面试。</p>
                         </div>
-                    ` : interviewHistory.map(record => `
-                        <div class="card" style="cursor: pointer;" onclick="showInterviewReport(${record.id})">
+                    ` : interviewHistory.map(record => {
+                        const report = getRecordAIReport(record);
+                        const score = report?.totalScore ?? record.score ?? 0;
+                        const recordId = getHistoryRecordId(record);
+                        const isInProgress = record.status === 'in_progress' && record.sessionId;
+                        const action = isInProgress
+                            ? `resumeInterviewSession('${escapeHTML(record.sessionId)}')`
+                            : `showInterviewReport('${escapeHTML(recordId)}')`;
+                        return `
+                        <div class="card" style="cursor: pointer;" onclick="${action}">
                             <div style="display: flex; justify-content: space-between;">
-                                <span class="company-tag">${record.type}</span>
-                                <span style="font-weight: 600; color: ${record.score >= 80 ? '#2c6e2c' : record.score >= 60 ? '#f5b342' : '#c00'}">
-                                    ${record.score}分
+                                <span class="company-tag">${escapeHTML(record.type || '模拟面试')}</span>
+                                <span style="font-weight: 600; color: ${isInProgress ? '#c47a00' : score >= 80 ? '#2c6e2c' : score >= 60 ? '#f5b342' : '#c00'}">
+                                    ${isInProgress ? '继续答题' : `${score}分`}
                                 </span>
                             </div>
                             <div style="margin-top: 12px; color: #4f6b4f;">
-                                ${new Date(record.created_at).toLocaleString()}
+                                ${new Date(record.finished_at || record.updated_at || record.created_at).toLocaleString()}
                             </div>
                         </div>
-                    `).join('')}
+                    `}).join('')}
                 </div>
             `;
         }
