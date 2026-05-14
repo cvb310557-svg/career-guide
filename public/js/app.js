@@ -246,23 +246,23 @@ function hideSplashScreen() {
         // ==================== 登录界面 ====================
         function renderLogin() {
     app.innerHTML = `
-        <div id="login-container" style="opacity: 0; transform: translateY(20px); transition: all 0.5s ease-out;">
-            <div class="content" style="display: flex; flex-direction: column; justify-content: center; min-height: 100vh;">
-                <div style="text-align: center; margin-bottom: 40px;">
-                    <div style="width: 100px; height: 100px; border-radius: 24px; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; overflow: hidden; background-color: #f0f7ee;">
-                        <img src="assets/images/logo.jpg" alt="职引官Logo" style="width: 100%; height: 100%; object-fit: cover;">
+        <div id="login-container" class="auth-container auth-enter">
+            <div class="content auth-content">
+                <div class="auth-brand">
+                    <div class="auth-logo">
+                        <img src="assets/images/logo.jpg" alt="职引官Logo">
                     </div>
-                    <h1 style="font-size: 32px; font-weight: 800; color: #1a3a1a;">职引官</h1>
-                    <p style="color: #4f6b4f; margin-top: 8px;">AI面试实战平台</p>
+                    <h1>职引官</h1>
+                    <p>AI面试实战平台</p>
                 </div>
 
-                <div class="card" style="margin-bottom: 20px;">
-                    <h3 style="margin-bottom: 20px;">登录</h3>
+                <div class="card auth-card">
+                    <h3>登录</h3>
                     <input type="text" id="login-username" class="input-field" placeholder="用户名">
                     <input type="password" id="login-password" class="input-field" placeholder="密码">
-                    <button class="btn-primary" onclick="handleLogin()" style="margin-bottom: 12px;">登录</button>
-                    <p style="text-align: center; color: #4f6b4f;">
-                        还没有账号？ <span style="color: #2c6e2c; font-weight: 600; cursor: pointer;" onclick="renderRegister()">立即注册</span>
+                    <button class="btn-primary" onclick="handleLogin()">登录</button>
+                    <p>
+                        还没有账号？ <span onclick="renderRegister()">立即注册</span>
                     </p>
                 </div>
             </div>
@@ -273,8 +273,7 @@ function hideSplashScreen() {
     setTimeout(() => {
         const loginContainer = document.getElementById('login-container');
         if (loginContainer) {
-            loginContainer.style.opacity = '1';
-            loginContainer.style.transform = 'translateY(0)';
+            loginContainer.classList.add('auth-enter-active');
         }
     }, 50);
 }
@@ -282,27 +281,35 @@ function hideSplashScreen() {
         // ==================== 注册界面 ====================
         function renderRegister() {
     app.innerHTML = `
-        <div class="content" style="display: flex; flex-direction: column; justify-content: center; min-height: 100vh;">
-            <div style="text-align: center; margin-bottom: 40px;">
-                <!-- 替换注册界面Logo -->
-                <div style="width: 80px; height: 80px; border-radius: 24px; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; overflow: hidden;">
-                    <img src="assets/images/logo.jpg" alt="职引官Logo" style="width: 100%; height: 100%; object-fit: cover;">
-                <div style="width: 120px; height: 120px; border-radius: 20px; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; overflow: hidden; background-color: #f0f7ee; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
-    <img src="assets/images/logo.jpg" alt="职引官Logo" style="width: 100%; height: 100%; object-fit: cover; display: block;">
-</div>
+        <div id="register-container" class="auth-container auth-enter">
+            <div class="content auth-content">
+                <div class="auth-brand">
+                    <div class="auth-logo">
+                        <img src="assets/images/logo.jpg" alt="职引官Logo">
+                    </div>
+                    <h1>创建账号</h1>
+                    <p>开始你的 AI 面试练习</p>
+                </div>
 
-            <div class="card" style="margin-bottom: 20px;">
-                <h3 style="margin-bottom: 20px;">注册</h3>
+            <div class="card auth-card">
+                <h3>注册</h3>
                 <input type="text" id="register-username" class="input-field" placeholder="用户名">
                 <input type="password" id="register-password" class="input-field" placeholder="密码">
-                <input type="text" id="register-nickname" class="input-field" placeholder="昵称">
-                <button class="btn-primary" onclick="handleRegister()" style="margin-bottom: 12px;">注册</button>
-                <p style="text-align: center; color: #4f6b4f;">
-                    已有账号？ <span style="color: #2c6e2c; font-weight: 600; cursor: pointer;" onclick="renderLogin()">立即登录</span>
+                <button class="btn-primary" onclick="handleRegister()">注册</button>
+                <p>
+                    已有账号？ <span onclick="renderLogin()">立即登录</span>
                 </p>
+            </div>
             </div>
         </div>
     `;
+
+    setTimeout(() => {
+        const registerContainer = document.getElementById('register-container');
+        if (registerContainer) {
+            registerContainer.classList.add('auth-enter-active');
+        }
+    }, 50);
 }
 
         // ==================== 处理登录 ====================
@@ -342,9 +349,8 @@ function hideSplashScreen() {
 
         // ==================== 处理注册 ====================
         async function handleRegister() {
-            const username = document.getElementById('register-username')?.value;
+            const username = document.getElementById('register-username')?.value?.trim();
             const password = document.getElementById('register-password')?.value;
-            const nickname = document.getElementById('register-nickname')?.value || username;
 
             if (!username || !password) {
                 alert('请输入用户名和密码');
@@ -355,7 +361,7 @@ function hideSplashScreen() {
                 const response = await fetch(`${API_BASE}/register`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username, password, nickname })
+                    body: JSON.stringify({ username, password })
                 });
 
                 const data = await response.json();

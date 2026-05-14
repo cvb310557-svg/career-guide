@@ -90,7 +90,9 @@ function loadLocalEnv() {
 }
 
 app.post('/api/register', async (req, res) => {
-    const { username, password, nickname } = req.body;
+    const username = String(req.body.username || '').trim();
+    const password = req.body.password;
+    const nickname = String(req.body.nickname || username).trim();
 
     if (!username || !password) {
         return res.status(400).json({ error: '请输入用户名和密码' });
