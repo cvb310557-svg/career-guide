@@ -34,19 +34,29 @@ const {
     fallbackReport,
     normalizeReport
 } = require('./interviewService');
+const { buildDbConfig } = require('./dbConfig');
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '3mb' }));
 
-const db = mysql.createPool({
-    host: process.env.DB_HOST || 'localhost',
-    user: process.env.DB_USER || 'root',
-    password: process.env.DB_PASSWORD || '',
-    database: process.env.DB_NAME || 'zhiguanguan',
-    port: Number(process.env.DB_PORT || 3306),
-    waitForConnections: true,
-    connectionLimit: 10
+const db = mysql.createPool(buildDbConfig());
+
+app.get('/api/health', async (req, res) => {
+    try {
+        await db.promise().query('SELECT 1');
+        res.json({
+            status: 'ok',
+            database: 'ok',
+            uptime: process.uptime()
+        });
+    } catch (error) {
+        res.status(503).json({
+            status: 'error',
+            database: 'unavailable',
+            message: error.message
+        });
+    }
 });
 
 const jobTemplateService = createJobTemplateService(db);
@@ -995,13 +1005,14 @@ app.get('/', (req, res) => {
 });
 
 const PORT = Number(process.env.PORT || 3000);
+const HOST = process.env.HOST || '0.0.0.0';
 ensureInterviewSessionTables()
     .then(ensureJobTemplateTables)
     .catch((error) => {
         console.warn('Interview/session template table initialization skipped:', error.message);
     })
     .finally(() => {
-        app.listen(PORT, () => {
-            console.log(`职引官后端服务运行在 http://localhost:${PORT}`);
+        app.listen(PORT, HOST, () => {
+            console.log(`职引官后端服务运行在 http://${HOST}:${PORT}`);
         });
     });

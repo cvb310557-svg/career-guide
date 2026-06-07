@@ -1,4 +1,28 @@
 
+## 2026-06-07
+
+### 阿里云 ECS 公网上线
+
+- 在阿里云 ECS Ubuntu 22.04.5 LTS 上完成生产环境部署，公网入口为 `https://zhiyinguan.com`。
+- 生产环境使用 Nginx 监听 `80/443`，反向代理到 PM2 托管的 `127.0.0.1:3000` Node 服务。
+- 完成服务器本机 MySQL 初始化，创建 `zhiguanguan` 数据库和 `career_guide` 数据库用户，并执行 `npm run db:init`。
+- 完成 HTTPS 证书签发，`http://zhiyinguan.com` 会跳转到 `https://zhiyinguan.com`。
+- 配置本机 SSH 别名 `career-guide-aliyun`，并支持 VS Code Remote - SSH 打开服务器目录 `/var/www/career-guide`。
+- 验证 `https://zhiyinguan.com/api/health` 返回 `status: ok`，PM2 应用 `career-guide` 在线。
+- 更新 `DEPLOYMENT.md`，补充后续本地开发、GitHub 提交、服务器发布、`.env` 修改和生产状态说明。
+- 当前待补：`www.zhiyinguan.com` 解析与证书、真实 AI API Key、账号安全增强和 MySQL 定期备份。
+
+## 2026-05-30
+
+### 公网部署准备
+
+- 新增 `src/dbConfig.js`，统一数据库连接配置，并兼容本地 `DB_*` 与 Railway MySQL 的 `MYSQL*` 环境变量。
+- 新增 `GET /api/health` 健康检查接口，用于公网平台部署时确认 Web 服务和数据库连接可用。
+- 新增 `scripts/init-db.js` 与 `npm run db:init`，支持在托管 MySQL 上初始化 `db/zhiyinguan.sql`。
+- 新增 `ecosystem.config.cjs`，用于阿里云 ECS 上通过 PM2 托管生产服务。
+- 新增 `DEPLOYMENT.md`，整理阿里云 ECS、Ubuntu、MySQL、Nginx、PM2、域名和 HTTPS 的公网部署步骤。
+- 修正文档中开发记录文件名，从 `CBY-history.md` 统一为实际存在的 `history.md`。
+
 ## 2026-05-13
 
 ### 正式面试闭环

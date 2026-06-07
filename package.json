@@ -5,6 +5,7 @@
   "main": "src/server.js",
   "scripts": {
     "db:start": "powershell -ExecutionPolicy Bypass -File scripts/start-mysql-dev.ps1",
+    "db:init": "node scripts/init-db.js",
     "start": "node src/server.js",
     "test:db": "node scripts/test-db.js"
   },

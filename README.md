@@ -1,8 +1,8 @@
 # 职引官 Career Guide
 
-职引官是一个面向求职者的 AI 面试实战平台。当前版本以原生单页前端、Express 后端和 MySQL 数据库为基础，支持岗位模板快速开始、自定义岗位面试、简历解析、逐题保存、AI 追问、复盘报告和历史回看。
+职引官是一个面向求职者的 AI 面试实战平台。当前版本以原生单页前端、Express 后端和 MySQL 数据库为基础，支持岗位模板快速开始、自定义岗位面试、简历解析、逐题保存、AI 追问、复盘报告和历史回看。项目已部署到阿里云 ECS，公网入口为 `https://zhiyinguan.com`。
 
-详细阶段计划见 [开发计划.md](./开发计划.md)，开发记录见 [CBY-history.md](./CBY-history.md)。
+详细阶段计划见 [开发计划.md](./开发计划.md)，开发记录见 [history.md](./history.md)，公网部署见 [DEPLOYMENT.md](./DEPLOYMENT.md)。
 
 ## 当前能力
 
@@ -12,6 +12,7 @@
 - 简历模块：支持粘贴文本或上传 txt，保存原文并生成结构化摘要。
 - 本地 fallback：AI 题目、追问、报告失败时仍可继续完成流程。
 - 本地 MySQL 开发脚本：`npm run db:start` 和 `npm run test:db`。
+- 阿里云 ECS 生产部署：Nginx 反向代理、PM2 托管、HTTPS、`/api/health` 健康检查。
 
 ## 技术栈
 
@@ -27,7 +28,9 @@
 .
 ├── .env.example                         # 环境变量示例
 ├── .gitignore
-├── CBY-history.md                       # 开发历史记录
+├── DEPLOYMENT.md                        # 公网部署指南
+├── ecosystem.config.cjs                 # PM2 生产进程配置
+├── history.md                           # 开发历史记录
 ├── README.md
 ├── package.json
 ├── package-lock.json
@@ -68,9 +71,11 @@
 │       ├── app-core.js                  # 前端配置与通用工具
 │       └── app.js                       # 前端主逻辑
 ├── scripts/
+│   ├── init-db.js                       # 初始化当前环境连接的 MySQL
 │   ├── start-mysql-dev.ps1              # 本地 MySQL 启动脚本
 │   └── test-db.js                       # 数据库连接测试
 └── src/
+    ├── dbConfig.js                      # 数据库连接配置
     ├── aiClient.js                      # AI 调用封装
     ├── interviewService.js              # 面试 session、turn、报告服务
     ├── jobTemplateService.js            # 岗位模板初始化和匹配
@@ -149,9 +154,32 @@ SOURCE D:/career-guide/db/zhiyinguan.sql;
 
 ```bash
 npm run db:start      # 启动本地开发 MySQL
+npm run db:init       # 初始化当前环境连接的 MySQL
 npm run test:db       # 测试数据库连接
 npm start             # 启动 Express 服务
 ```
+
+## 生产环境
+
+```text
+公网地址：https://zhiyinguan.com
+服务器目录：/var/www/career-guide
+SSH 别名：career-guide-aliyun
+PM2 应用名：career-guide
+```
+
+常用运维命令：
+
+```bash
+ssh career-guide-aliyun
+cd /var/www/career-guide
+pm2 status
+pm2 logs career-guide
+pm2 restart career-guide --update-env
+curl https://zhiyinguan.com/api/health
+```
+
+生产服务器 `.env` 只保存在服务器上，不进入 GitHub。
 
 语法检查：
 
@@ -164,8 +192,8 @@ node --check public/js/app-core.js
 
 ## 当前分支
 
-正式面试闭环改动在：
+当前主线分支：
 
 ```text
-feature/interview-mvp-loop
+main
 ```
